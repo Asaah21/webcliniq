@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebCliniQ — Audit Your Web Presence</title>
+<meta name="description" content="Web audits and fixes for healthcare and dental clinics, built by a nurse who codes. Find out what's costing you patients online — free.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="site-header">
+  <nav class="nav">
+    <a href="index.html" class="logo">WebClini<span>Q</span></a>
+    <ul class="nav-links">
+      <li><a href="index.html" class="active">Home</a></li>
+      <li><a href="about.html">About</a></li>
+      <li><a href="services.html">Services</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+      <li><a href="contact.html">Contact</a></li>
+    </ul>
+    <div class="nav-right">
+      <a href="#audit" class="btn btn-primary">Audit Your Web Presence</a>
+      <button class="nav-toggle" aria-label="Toggle menu"><span></span><span></span><span></span></button>
+    </div>
+  </nav>
+</header>
+
+<main>
+
+  <!-- HERO -->
+  <section class="hero" id="audit">
+    <div class="container">
+      <div class="hero-content">
+        <h1>Find out what's costing you patients online.</h1>
+        <p class="hero-sub">Web audits and fixes for healthcare and dental clinics, run by a nurse who also builds software. Free to check, no obligation to fix anything.</p>
+      </div>
+
+      <div class="audit-bar-wrap">
+        <form id="audit-form" class="audit-form">
+          <div class="audit-bar">
+            <input type="text" id="audit-input" placeholder="Business name or website URL" required>
+            <button type="submit" class="btn btn-primary">Audit Your Web Presence</button>
+          </div>
+        </form>
+        <p class="audit-bar-hint" id="audit-hint">Real check, takes about 15 seconds.</p>
+
+        <div class="audit-loading" id="audit-loading">
+          <span class="dot"></span>Running your audit — checking speed, SEO, and Google visibility…
+        </div>
+
+        <div class="audit-error" id="audit-error">
+          <p></p>
+        </div>
+
+        <div class="audit-results" id="audit-results">
+          <ul class="vitals-list" id="audit-findings"></ul>
+
+          <div class="audit-results-cta">
+            <a href="contact.html" class="btn btn-primary btn-block">Get These Fixed</a>
+          </div>
+
+          <form id="audit-email-form" class="audit-email-form" name="audit-report-request" method="POST" data-netlify="true" netlify-honeypot="bot-field">
+            <input type="hidden" name="form-name" value="audit-report-request">
+            <p hidden><label>Don't fill this out: <input name="bot-field"></label></p>
+            <input type="hidden" name="submitted-value" id="audit-email-context">
+            <div class="audit-email-row">
+              <input type="email" name="email" placeholder="Email this report to me" required>
+              <button type="submit" class="btn btn-outline">Send</button>
+            </div>
+          </form>
+          <div class="audit-email-confirm" id="audit-email-confirm">Sent — check your inbox.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="section-alt">
+    <div class="container">
+      <div class="section-head center">
+        <span class="eyebrow">How It Works</span>
+        <h2>Three steps. No guessing which one you need first.</h2>
+      </div>
+      <div class="steps">
+        <div class="step reveal">
+          <span class="step-num">1</span>
+          <h3>Audit</h3>
+          <p>A free review of your site speed, Google visibility, and reviews — the things that actually affect whether patients find you.</p>
+        </div>
+        <div class="step reveal">
+          <span class="step-num">2</span>
+          <h3>Fix</h3>
+          <p>Fast, targeted fixes for whatever the audit flags. Most clinics only need this.</p>
+        </div>
+        <div class="step reveal">
+          <span class="step-num">3</span>
+          <h3>Rebuild, if needed</h3>
+          <p>If the audit shows the site itself is the real problem, a full rebuild gets recommended — never sold as the first option.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SERVICES PREVIEW -->
+  <section>
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">Services</span>
+        <h2>Start with what's actually broken</h2>
+        <p>Most clinics don't need a new website. They need three or four specific things fixed.</p>
+      </div>
+      <div class="card-grid reveal">
+        <div class="card">
+          <span class="tag">Quick Fix</span>
+          <h3>Speed Fix</h3>
+          <p>Slow pages lose patients before they even see what you offer. We find and fix what's dragging your load time down.</p>
+          <div class="card-price">Priced after your audit</div>
+        </div>
+        <div class="card">
+          <span class="tag">Quick Fix</span>
+          <h3>Google Business Profile</h3>
+          <p>Setup, verification, and optimization so your clinic actually shows up when someone searches nearby.</p>
+          <div class="card-price">Priced after your audit</div>
+        </div>
+        <div class="card">
+          <span class="tag">Quick Fix</span>
+          <h3>Review Management</h3>
+          <p>A simple system for collecting and responding to reviews, so trust builds on its own over time.</p>
+          <div class="card-price">Priced after your audit</div>
+        </div>
+      </div>
+      <p class="text-center" style="margin-top:32px;"><a href="services.html" class="btn btn-outline">See all services</a></p>
+    </div>
+  </section>
+
+  <!-- ABOUT TEASER -->
+  <section class="section-alt">
+    <div class="container two-col" style="align-items:center;">
+      <div>
+        <span class="eyebrow">Who's Behind This</span>
+        <h2>Run by a nurse, not an account manager</h2>
+        <p>WebCliniQ is one person — a registered nurse who taught himself to build software — plus a small bench of vetted subcontractors for the work that needs extra hands. You talk to the person doing the work, every time.</p>
+        <a href="about.html" class="btn btn-outline">Read the full story</a>
+      </div>
+      <div class="card">
+        <span class="tag">Why It Matters</span>
+        <h3>Healthcare fluency, not guesswork</h3>
+        <ul>
+          <li>Understands patient flow, not just page layout</li>
+          <li>Knows what actually builds trust for a clinic online</li>
+          <li>Direct access — no account managers, no handoffs</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL CTA -->
+  <section class="section-dark">
+    <div class="container text-center">
+      <h2>Ready to see what's holding your site back?</h2>
+      <p>Free, takes a minute, no obligation to fix anything we find.</p>
+      <a href="#audit" class="btn btn-primary">Audit Your Web Presence</a>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div>
+        <span class="footer-logo">WebClini<span style="color:var(--accent);">Q</span></span>
+        <p class="footer-tag">Web audits and quick fixes for healthcare and dental clinics, built by a nurse who codes.</p>
+      </div>
+      <div>
+        <h4>Site</h4>
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="about.html">About</a></li>
+          <li><a href="services.html">Services</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Get in touch</h4>
+        <ul>
+          <li><a href="contact.html">Contact</a></li>
+          <li><a href="mailto:alemiyaemmanuel24@gmail.com">Email us</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="privacy.html">Privacy Policy</a></li>
+          <li><a href="terms.html">Terms of Use</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 WebCliniQ. All rights reserved.</span>
+      <span>Ghana-based · Serving clinics worldwide</span>
+    </div>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
