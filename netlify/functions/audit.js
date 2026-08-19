@@ -6,14 +6,15 @@
 // a website, or both (comma-separated) — parses
 // it and runs whichever checks apply:
 //  - Website: PageSpeed Insights (speed/SEO/
-//    accessibility/best-practices) + a basic
-//    Google-indexing check via Custom Search API
+//    accessibility/best-practices), plus a
+//    crawlability read pulled from Lighthouse's
+//    own is-crawlable audit — no separate
+//    indexing API needed
 //  - Business name: Places API Text Search, read
 //    deeply (reviews, hours, photos, category)
 //
 // Requires Netlify env vars:
-//    GOOGLE_API_KEY, GOOGLE_CSE_ID,
-//    SUPABASE_URL, SUPABASE_SERVICE_KEY
+//    GOOGLE_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY
 // Each check degrades gracefully (skips, or shows
 // a clear error) if its config is missing — never
 // fakes data.
@@ -82,26 +83,6 @@ async function logLead({ raw, businessName, websiteUrl, findings }) {
   }
 }
 
-async function checkIndexed(normalizedUrl) {
-  const API_KEY = process.env.GOOGLE_API_KEY;
-  const CSE_ID = process.env.GOOGLE_CSE_ID;
-  if (!CSE_ID) return null;
-  try {
-    const domain = normalizedUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const url = `https://www.googleapis.com/customsearch/v1?key=${API_KEY}&cx=${CSE_ID}&q=${encodeURIComponent('site:' + domain)}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if (data.error) {
-      console.error('CSE failed for', domain, JSON.stringify(data.error));
-      return null;
-    }
-    const total = data.searchInformation ? parseInt(data.searchInformation.totalResults || '0', 10) : 0;
-    return total > 0;
-  } catch (err) {
-    return null;
-  }
-}
-
 async function checkWebsite(websiteUrl, findings) {
   const API_KEY = process.env.GOOGLE_API_KEY;
   const normalizedUrl = websiteUrl.startsWith('http') ? websiteUrl : `https://${websiteUrl}`;
@@ -132,12 +113,15 @@ async function checkWebsite(websiteUrl, findings) {
       findings.push({ flag: scores.bestPractices < 80 ? 'warn' : 'ok', priority: 5,
         text: `Technical best-practices score: ${scores.bestPractices}/100.` });
 
-      const indexed = await checkIndexed(normalizedUrl);
-      if (indexed === true) {
-        findings.push({ flag: 'ok', priority: 3, text: 'Your site is indexed by Google — it can actually be found in search.' });
-      } else if (indexed === false) {
-        findings.push({ flag: 'warn', priority: 1, text: 'Your site doesn\'t appear to be indexed by Google at all — patients can\'t find you in search, period.' });
+      const crawlable = psiData.lighthouseResult.audits && psiData.lighthouseResult.audits['is-crawlable'];
+      if (crawlable && crawlable.score !== null) {
+        if (crawlable.score === 1) {
+          findings.push({ flag: 'ok', priority: 3, text: 'Nothing is blocking Google from indexing this page.' });
+        } else {
+          findings.push({ flag: 'warn', priority: 1, text: 'This page is actively blocking Google from indexing it — it may not show up in search at all.' });
+        }
       }
+
       return scores;
     } else {
       const psiErrorMsg = psiData.error && psiData.error.message ? psiData.error.message : null;
