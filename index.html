@@ -39,11 +39,11 @@
       <div class="audit-bar-wrap">
         <form id="audit-form" class="audit-form">
           <div class="audit-bar">
-            <input type="text" id="audit-input" placeholder="Business name or website URL" required>
+            <input type="text" id="audit-input" placeholder="Business name, website (e.g. Divine Favour Clinic, divinefavour.com)" required>
             <button type="submit" class="btn btn-primary">Audit Your Web Presence</button>
           </div>
         </form>
-        <p class="audit-bar-hint" id="audit-hint">Real check, takes about 15 seconds.</p>
+        <p class="audit-bar-hint" id="audit-hint">Add both for the fullest read — real check, ~15 seconds.</p>
 
         <div class="audit-loading" id="audit-loading">
           <span class="dot"></span>Running your audit — checking speed, SEO, and Google visibility…
@@ -56,16 +56,19 @@
         <div class="audit-results" id="audit-results">
           <ul class="vitals-list" id="audit-findings"></ul>
 
+          <p class="audit-results-summary" id="audit-results-summary"></p>
+
           <div class="audit-results-cta">
-            <a href="contact.html" class="btn btn-primary btn-block">Get These Fixed</a>
+            <a href="contact.html" class="btn btn-primary btn-block" id="audit-cta-link">Get These Fixed</a>
           </div>
 
+          <p class="audit-email-label">Prefer email? We'll send this over instead — no pressure either way.</p>
           <form id="audit-email-form" class="audit-email-form" name="audit-report-request" method="POST" data-netlify="true" netlify-honeypot="bot-field">
             <input type="hidden" name="form-name" value="audit-report-request">
             <p hidden><label>Don't fill this out: <input name="bot-field"></label></p>
             <input type="hidden" name="submitted-value" id="audit-email-context">
             <div class="audit-email-row">
-              <input type="email" name="email" placeholder="Email this report to me" required>
+              <input type="email" name="email" placeholder="you@yourclinic.com" required>
               <button type="submit" class="btn btn-outline">Send</button>
             </div>
           </form>
@@ -186,7 +189,7 @@
         <h4>Get in touch</h4>
         <ul>
           <li><a href="contact.html">Contact</a></li>
-          <li><a href="mailto:alemiyaemmanuel24@gmail.com">Email us</a></li>
+          <li><a href="mailto:support@webcliniq.com">Email us</a></li>
         </ul>
       </div>
       <div>
