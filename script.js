@@ -74,22 +74,23 @@ function initAuditBar() {
   const errorBox = document.getElementById('audit-error');
   const results = document.getElementById('audit-results');
   const findingsList = document.getElementById('audit-findings');
+  const urgentBox = document.getElementById('audit-urgent');
+  const summary = document.getElementById('audit-results-summary');
+  const ctaLink = document.getElementById('audit-cta-link');
+  const nudgeBox = document.getElementById('audit-nudge');
   if (!form) return;
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const input = document.getElementById('audit-input');
-    const value = input.value.trim();
-    if (!value) return;
+  const WHATSAPP_NUMBER = '233538665715';
 
+  async function runAudit(value) {
     form.classList.add('hidden');
     if (hint) hint.style.display = 'none';
     errorBox.classList.remove('active');
     results.classList.remove('active');
+    nudgeBox.innerHTML = '';
+    urgentBox.classList.remove('active');
+    urgentBox.innerHTML = '';
     loading.classList.add('active');
-
-    const emailContext = document.getElementById('audit-email-context');
-    if (emailContext) emailContext.value = value;
 
     try {
       const res = await fetch('/.netlify/functions/audit', {
@@ -108,12 +109,65 @@ function initAuditBar() {
         return;
       }
 
+      const list = data.findings || [];
+      let topFinding = null;
+      let listToShow = list;
+
+      if (!data.alreadyChecked && list.length && list[0].flag === 'warn') {
+        topFinding = list[0];
+        listToShow = list.slice(1);
+        urgentBox.innerHTML = `<span class="audit-urgent-label">Most Urgent</span><span>${topFinding.text}</span>`;
+        urgentBox.classList.add('active');
+      }
+
       findingsList.innerHTML = '';
-      (data.findings || []).forEach(f => {
+      listToShow.forEach((f, i) => {
         const li = document.createElement('li');
         li.innerHTML = `<span class="vitals-flag ${f.flag}">${f.flag === 'warn' ? 'Flag' : 'Clear'}</span><span>${f.text}</span>`;
         findingsList.appendChild(li);
+        setTimeout(() => li.classList.add('in'), i * 140);
       });
+
+      const remaining = listToShow.filter(f => f.flag === 'warn').length;
+      if (summary) {
+        summary.textContent = data.alreadyChecked
+          ? ''
+          : remaining > 0
+            ? `${remaining} more issue${remaining === 1 ? '' : 's'} below.`
+            : 'Nothing else urgent — solid baseline.';
+      }
+
+      const waText = topFinding
+        ? `Hi WebCliniQ! I ran an audit for "${value}". Top issue: ${topFinding.text} I'd like to get this fixed.`
+        : `Hi WebCliniQ! I ran an audit for "${value}" and wanted to follow up.`;
+      if (ctaLink) ctaLink.href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(waText)}`;
+
+      if (!data.alreadyChecked) {
+        if (data.hadWebsite === false) {
+          nudgeBox.innerHTML =
+            `<p class="audit-nudge-label">Add your website for a fuller read →</p>
+             <form class="audit-nudge-form" id="audit-nudge-form">
+               <input type="text" id="audit-nudge-input" placeholder="yourclinic.com">
+               <button type="submit" class="btn btn-outline">Add</button>
+             </form>`;
+        } else if (data.hadBusinessName === false) {
+          nudgeBox.innerHTML =
+            `<p class="audit-nudge-label">Add your business name for a Google visibility check →</p>
+             <form class="audit-nudge-form" id="audit-nudge-form">
+               <input type="text" id="audit-nudge-input" placeholder="Your Clinic Name">
+               <button type="submit" class="btn btn-outline">Add</button>
+             </form>`;
+        }
+        const nudgeForm = document.getElementById('audit-nudge-form');
+        if (nudgeForm) {
+          nudgeForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const extra = document.getElementById('audit-nudge-input').value.trim();
+            if (extra) runAudit(`${value}, ${extra}`);
+          });
+        }
+      }
+
       results.classList.add('active');
     } catch (err) {
       loading.classList.remove('active');
@@ -122,24 +176,12 @@ function initAuditBar() {
       form.classList.remove('hidden');
       if (hint) hint.style.display = '';
     }
-  });
-
-  const emailForm = document.getElementById('audit-email-form');
-  const emailConfirm = document.getElementById('audit-email-confirm');
-  if (emailForm) {
-    emailForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const formData = new FormData(emailForm);
-      fetch('/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams(formData).toString(),
-      })
-        .catch(() => { /* expected off-Netlify */ })
-        .finally(() => {
-          emailForm.classList.add('hidden');
-          emailConfirm.classList.add('active');
-        });
-    });
   }
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = document.getElementById('audit-input');
+    const value = input.value.trim();
+    if (value) runAudit(value);
+  });
 }

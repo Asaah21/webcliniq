@@ -221,5 +221,8 @@ exports.handler = async function (event) {
 
   await logLead({ raw, businessName, websiteUrl, findings });
 
-  return { statusCode: 200, body: JSON.stringify({ findings, siteScores, placeInfo }) };
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ findings, siteScores, placeInfo, hadWebsite: !!websiteUrl, hadBusinessName: !!businessName }),
+  };
 };
