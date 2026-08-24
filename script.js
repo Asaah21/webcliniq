@@ -1,5 +1,5 @@
 // ============================================
-// WebCliniK — shared behavior
+// WebCliniQ — shared behavior
 // ============================================
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -141,6 +141,15 @@ function initAuditBar() {
         ? `Hi WebCliniQ! I ran an audit for "${value}". Top issue: ${topFinding.text} I'd like to get this fixed.`
         : `Hi WebCliniQ! I ran an audit for "${value}" and wanted to follow up.`;
       if (ctaLink) ctaLink.href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(waText)}`;
+
+      const emailLink = document.getElementById('audit-cta-email-link');
+      if (emailLink) {
+        const emailSubject = `Audit follow-up: ${value}`;
+        const emailBody = topFinding
+          ? `Hi WebCliniQ,\n\nI ran the audit for "${value}". Top issue: ${topFinding.text}\n\nI'd like to talk about getting this fixed.`
+          : `Hi WebCliniQ,\n\nI ran the audit for "${value}" and wanted to follow up.`;
+        emailLink.href = `mailto:support@webcliniq.com?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+      }
 
       if (!data.alreadyChecked) {
         if (data.hadWebsite === false) {

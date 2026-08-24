@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WebCliniQ — Audit Your Web Presence</title>
-<meta name="description" content="Web audits and fixes for healthcare and dental clinics, built by a nurse who codes. Find out what's costing you patients online — free.">
+<title>WebCliniQ — Web Audits for Dental Practices</title>
+<meta name="description" content="Free web audits and quick fixes for dental practices, built by a nurse who codes. Find out what's costing you patients online — free.">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -33,20 +33,21 @@
     <div class="container">
       <div class="hero-content">
         <h1>Find out what's costing you patients online.</h1>
-        <p class="hero-sub">Web audits and fixes for healthcare and dental clinics, run by a nurse who also builds software. Free to check, no obligation to fix anything.</p>
+        <p class="hero-sub">Free, real audit — your site speed, your Google visibility, your reviews — in about 15 seconds. Built for dental practices, run by a nurse who also builds software.</p>
       </div>
 
       <div class="audit-bar-wrap">
         <form id="audit-form" class="audit-form">
           <div class="audit-bar">
-            <input type="text" id="audit-input" placeholder="Business name, website (e.g. Divine Favour Clinic, divinefavour.com)" required>
+            <input type="text" id="audit-input" placeholder="Practice name, website (e.g. Bright Smile Dental, brightsmiledental.com)" required>
             <button type="submit" class="btn btn-primary">Audit Your Web Presence</button>
           </div>
         </form>
         <p class="audit-bar-hint" id="audit-hint">Add both for the fullest read — real check, ~15 seconds.</p>
+        <p class="audit-trust-note">We only read what's already public — nothing on your site changes.</p>
 
         <div class="audit-loading" id="audit-loading">
-          <span class="dot"></span>Running your audit — checking speed, SEO, and Google visibility…
+          <span class="dot"></span>Running your audit — checking speed, Google visibility, and reviews…
         </div>
 
         <div class="audit-error" id="audit-error">
@@ -62,6 +63,9 @@
           <div class="audit-results-cta">
             <a href="#" target="_blank" rel="noopener" class="btn btn-primary btn-block" id="audit-cta-link">Message Us on WhatsApp</a>
           </div>
+          <div class="audit-cta-secondary">
+            <a href="#" id="audit-cta-email-link">or email us this report instead</a>
+          </div>
 
           <div class="audit-nudge" id="audit-nudge"></div>
         </div>
@@ -74,23 +78,34 @@
     <div class="container">
       <div class="section-head center">
         <span class="eyebrow">How It Works</span>
-        <h2>Three steps. No guessing which one you need first.</h2>
+        <h2>We fix what's urgent first. Everything else waits.</h2>
       </div>
-      <div class="steps">
-        <div class="step reveal">
-          <span class="step-num">1</span>
-          <h3>Audit</h3>
-          <p>A free review of your site speed, Google visibility, and reviews — the things that actually affect whether patients find you.</p>
+      <div class="hiw-track">
+        <div class="hiw-stage">
+          <div class="hiw-num">1</div>
+          <div class="hiw-card">
+            <span class="hiw-tag">Free · ~15 seconds</span>
+            <h3>We check your web presence</h3>
+            <p>How fast your site loads, whether you show up when someone nearby searches on Google, and how your reviews look. Free, real, no obligation.</p>
+          </div>
         </div>
-        <div class="step reveal">
-          <span class="step-num">2</span>
-          <h3>Fix</h3>
-          <p>Fast, targeted fixes for whatever the audit flags. Most clinics only need this.</p>
+        <div class="hiw-stage">
+          <div class="hiw-connector"></div>
+          <div class="hiw-num">2</div>
+          <div class="hiw-card">
+            <span class="hiw-tag">Most practices stop here</span>
+            <h3>We fix what's actually urgent</h3>
+            <p>A slow page, a missing Google listing, no reviews yet — the specific, simple things quietly costing you patients. Fixed fast, priced small.</p>
+          </div>
         </div>
-        <div class="step reveal">
-          <span class="step-num">3</span>
-          <h3>Rebuild, if needed</h3>
-          <p>If the audit shows the site itself is the real problem, a full rebuild gets recommended — never sold as the first option.</p>
+        <div class="hiw-stage">
+          <div class="hiw-connector"></div>
+          <div class="hiw-num">3</div>
+          <div class="hiw-card">
+            <span class="hiw-tag">Only if you need it</span>
+            <h3>Bigger projects, when it makes sense</h3>
+            <p>A new website. Showing up in search on Google — and in AI answers, too. Turning more visitors into booked patients. We only bring these up if the audit actually points there.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -102,7 +117,7 @@
       <div class="section-head">
         <span class="eyebrow">Services</span>
         <h2>Start with what's actually broken</h2>
-        <p>Most clinics don't need a new website. They need three or four specific things fixed.</p>
+        <p>Most dental practices don't need a new website. They need three or four specific things fixed.</p>
       </div>
       <div class="card-grid reveal">
         <div class="card">
@@ -114,7 +129,7 @@
         <div class="card">
           <span class="tag">Quick Fix</span>
           <h3>Google Business Profile</h3>
-          <p>Setup, verification, and optimization so your clinic actually shows up when someone searches nearby.</p>
+          <p>The listing patients see before they ever reach your website. We set it up, verify it, and make sure it actually shows up when someone searches nearby.</p>
           <div class="card-price">Priced after your audit</div>
         </div>
         <div class="card">
@@ -139,10 +154,10 @@
       </div>
       <div class="card">
         <span class="tag">Why It Matters</span>
-        <h3>Healthcare fluency, not guesswork</h3>
+        <h3>Dental fluency, not guesswork</h3>
         <ul>
-          <li>Understands patient flow, not just page layout</li>
-          <li>Knows what actually builds trust for a clinic online</li>
+          <li>Knows a patient picks a dental practice off your Google reviews before they ever see your homepage — that's where we start, not a redesign</li>
+          <li>Careful with what review responses and website forms reveal — patient trust matters online, too</li>
           <li>Direct access — no account managers, no handoffs</li>
         </ul>
       </div>
@@ -165,7 +180,7 @@
     <div class="footer-grid">
       <div>
         <span class="footer-logo">WebClini<span style="color:var(--accent);">Q</span></span>
-        <p class="footer-tag">Web audits and quick fixes for healthcare and dental clinics, built by a nurse who codes.</p>
+        <p class="footer-tag">Web audits and quick fixes for dental practices, built by a nurse who codes.</p>
       </div>
       <div>
         <h4>Site</h4>
@@ -193,7 +208,7 @@
     </div>
     <div class="footer-bottom">
       <span>© 2026 WebCliniQ. All rights reserved.</span>
-      <span>Ghana-based · Serving clinics worldwide</span>
+      <span>Ghana-based · Serving dental practices worldwide</span>
     </div>
   </div>
 </footer>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Contact — WebCliniQ</title>
+<meta name="description" content="Reach WebCliniQ directly on WhatsApp, by email, or through the contact form — no account managers, no handoffs.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="site-header">
+  <nav class="nav">
+    <a href="index.html" class="logo">WebClini<span>Q</span></a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="about.html">About</a></li>
+      <li><a href="services.html">Services</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+      <li><a href="contact.html" class="active">Contact</a></li>
+    </ul>
+    <div class="nav-right">
+      <a href="index.html#audit" class="btn btn-primary">Audit Your Web Presence</a>
+      <button class="nav-toggle" aria-label="Toggle menu"><span></span><span></span><span></span></button>
+    </div>
+  </nav>
+</header>
+
+<main>
+  <section class="page-header">
+    <div class="container">
+      <span class="eyebrow">Contact</span>
+      <h1>Talk to the person doing the work</h1>
+      <p>No account managers, no ticket queue — whichever way you reach out, it comes straight to WebCliniQ.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="container two-col">
+      <div class="form-card">
+        <h3 style="margin-bottom:16px;">Send a message</h3>
+        <form name="contact" method="POST" data-netlify="true" netlify-honeypot="bot-field">
+          <input type="hidden" name="form-name" value="contact">
+          <p style="display:none;"><label>Don't fill this out: <input name="bot-field"></label></p>
+          <div class="field">
+            <label for="contact-name">Name</label>
+            <input type="text" id="contact-name" name="name" required>
+          </div>
+          <div class="field">
+            <label for="contact-practice">Practice name</label>
+            <input type="text" id="contact-practice" name="practice">
+          </div>
+          <div class="field">
+            <label for="contact-email">Email</label>
+            <input type="email" id="contact-email" name="email" required>
+          </div>
+          <div class="field">
+            <label for="contact-message">Message</label>
+            <textarea id="contact-message" name="message" rows="4" required></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary">Send Message</button>
+        </form>
+      </div>
+      <div>
+        <h3>Prefer another way?</h3>
+        <p><a href="https://wa.me/233538665715" target="_blank" rel="noopener">Message on WhatsApp →</a></p>
+        <p><a href="mailto:support@webcliniq.com">support@webcliniq.com →</a></p>
+        <p style="margin-top:32px;color:var(--muted);font-family:var(--font-mono);font-size:0.85rem;">Ghana-based · Serving dental practices worldwide</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div>
+        <span class="footer-logo">WebClini<span style="color:var(--accent);">Q</span></span>
+        <p class="footer-tag">Web audits and quick fixes for dental practices, built by a nurse who codes.</p>
+      </div>
+      <div>
+        <h4>Site</h4>
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="about.html">About</a></li>
+          <li><a href="services.html">Services</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Get in touch</h4>
+        <ul>
+          <li><a href="contact.html">Contact</a></li>
+          <li><a href="mailto:support@webcliniq.com">Email us</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="privacy.html">Privacy Policy</a></li>
+          <li><a href="terms.html">Terms of Use</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 WebCliniQ. All rights reserved.</span>
+      <span>Ghana-based · Serving dental practices worldwide</span>
+    </div>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
