@@ -86,6 +86,20 @@ function friendlyWebsiteError(psiData) {
   return "We couldn't fully check that website right now.";
 }
 
+// Logged once at cold start, not per-request — tells you in the Netlify
+// function logs immediately if an env var is simply missing, which is
+// the single most common cause of "nothing in the database."
+function checkSupabaseConfig() {
+  const SUPABASE_URL = process.env.SUPABASE_URL;
+  const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    console.error('Supabase not configured: missing', !SUPABASE_URL ? 'SUPABASE_URL' : '', !SUPABASE_SERVICE_KEY ? 'SUPABASE_SERVICE_KEY' : '');
+    return false;
+  }
+  return true;
+}
+checkSupabaseConfig();
+
 async function hasRecentCheck(raw) {
   const SUPABASE_URL = process.env.SUPABASE_URL;
   const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -96,9 +110,14 @@ async function hasRecentCheck(raw) {
       `${SUPABASE_URL}/rest/v1/leads?input_value=eq.${encodeURIComponent(raw)}&created_at=gte.${encodeURIComponent(since)}&select=id&limit=1`,
       { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
     );
+    if (!res.ok) {
+      console.error('hasRecentCheck failed:', res.status, await res.text());
+      return false;
+    }
     const rows = await res.json();
     return Array.isArray(rows) && rows.length > 0;
-  } catch {
+  } catch (err) {
+    console.error('hasRecentCheck threw:', err.message);
     return false;
   }
 }
@@ -108,7 +127,7 @@ async function logLead({ raw, businessName, websiteUrl, findings, actionSummary,
   const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
   try {
-    await fetch(`${SUPABASE_URL}/rest/v1/leads`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/leads`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -127,8 +146,16 @@ async function logLead({ raw, businessName, websiteUrl, findings, actionSummary,
         ip, // requires an `ip` text column on the leads table
       }),
     });
+    if (!res.ok) {
+      // Most common causes: missing column on the `leads` table, RLS policy
+      // blocking the insert, or SUPABASE_SERVICE_KEY being the anon key
+      // instead of the service_role key. The response body usually says which.
+      console.error('logLead insert failed:', res.status, await res.text());
+    }
   } catch (err) {
-    // Lead logging must never break the user-facing result.
+    // Lead logging must never break the user-facing result, but it should
+    // always leave a trace in the function logs.
+    console.error('logLead threw:', err.message);
   }
 }
 
@@ -146,9 +173,14 @@ async function tooManyRequestsFromIp(ip) {
       `${SUPABASE_URL}/rest/v1/leads?ip=eq.${encodeURIComponent(ip)}&created_at=gte.${encodeURIComponent(since)}&select=id`,
       { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
     );
+    if (!res.ok) {
+      console.error('tooManyRequestsFromIp failed:', res.status, await res.text());
+      return false;
+    }
     const rows = await res.json();
     return Array.isArray(rows) && rows.length >= 2;
-  } catch {
+  } catch (err) {
+    console.error('tooManyRequestsFromIp threw:', err.message);
     return false;
   }
 }
