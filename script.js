@@ -1,7 +1,3 @@
-// ============================================
-// WebCliniQ — shared behavior
-// ============================================
-
 document.addEventListener('DOMContentLoaded', () => {
   initNav();
   initReveal();
@@ -9,7 +5,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initAuditBar();
 });
 
-/* ---------- Mobile nav ---------- */
 function initNav() {
   const toggle = document.querySelector('.nav-toggle');
   const links = document.querySelector('.nav-links');
@@ -18,7 +13,6 @@ function initNav() {
   links.querySelectorAll('a').forEach(a => a.addEventListener('click', () => links.classList.remove('open')));
 }
 
-/* ---------- Scroll reveal ---------- */
 function initReveal() {
   const items = document.querySelectorAll('.reveal');
   if (!items.length) return;
@@ -37,7 +31,6 @@ function initReveal() {
   items.forEach(el => obs.observe(el));
 }
 
-/* ---------- FAQ accordion ---------- */
 function initFAQ() {
   const items = document.querySelectorAll('.faq-item');
   items.forEach(item => {
@@ -51,25 +44,6 @@ function initFAQ() {
   });
 }
 
-/* ============================================
-   Audit bar — real audit via serverless function
-   ------------------------------------------
-   Calls /.netlify/functions/audit, which runs a
-   real Google PageSpeed check (if the input looks
-   like a URL) or a real Google Places lookup (if it
-   looks like a business name). No simulated results —
-   the backend never fakes data, and always translates
-   technical errors into plain language before they
-   reach this file.
-
-   Capped at two checks per page load — enough to check
-   one thing and then add the other, not enough to spam
-   the backend. The Netlify function enforces the same
-   cap per IP as a backstop.
-
-   The secondary "email this report" field is a real
-   Netlify Form, only functional once deployed on Netlify.
-   ============================================ */
 function initAuditBar() {
   const form = document.getElementById('audit-form');
   const hint = document.getElementById('audit-hint');
@@ -113,18 +87,19 @@ function initAuditBar() {
     ctaGroup.classList.add('hidden');
   }
 
-  function setCtaLinks(value, topFinding) {
-    const waText = topFinding
-      ? `Hi WebCliniQ. I ran an audit for "${value}". Top issue: ${topFinding.text} I'd like to get this fixed.`
-      : `Hi WebCliniQ. I ran an audit for "${value}" and wanted to follow up.`;
-    if (ctaLink) ctaLink.href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(waText)}`;
+  function setCtaLinks(value, topFinding, healthScore) {
+    const scoreText = healthScore ? `Score: ${healthScore}/100. ` : '';
+    const issueText = topFinding ? `Top issue: ${topFinding.text}` : 'I would like to review the diagnostic findings.';
+    const waText = `Hi WebCliniQ, I ran a diagnostic for "${value}". ${scoreText}${issueText} How fast can we resolve this?`;
+    
+    if (ctaLink) {
+      ctaLink.href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(waText)}`;
+    }
 
     const emailLink = document.getElementById('audit-cta-email-link');
     if (emailLink) {
-      const emailSubject = `Audit follow-up: ${value}`;
-      const emailBody = topFinding
-        ? `Hi WebCliniQ,\n\nI ran the audit for "${value}". Top issue: ${topFinding.text}\n\nI'd like to talk about getting this fixed.`
-        : `Hi WebCliniQ,\n\nI ran the audit for "${value}" and wanted to follow up.`;
+      const emailSubject = `Diagnostic Report Request: ${value}`;
+      const emailBody = `Hi WebCliniQ,\n\nI ran an audit for "${value}".\nPractice Health Score: ${healthScore || 'N/A'}/100\n${issueText}\n\nPlease email me the full diagnostic breakdown.`;
       emailLink.href = `mailto:support@webcliniq.com?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
     }
   }
@@ -138,16 +113,16 @@ function initAuditBar() {
 
   function buildNudge(data, value) {
     const isMissingWebsite = data.hadWebsite === false;
-    const label = isMissingWebsite ? "Add your website for a fuller picture" : "Add your business name for a Google check";
-    const placeholder = isMissingWebsite ? 'yourclinic.com' : 'Your Business Name';
+    const label = isMissingWebsite ? "Add your website URL for mobile speed & security checks" : "Add your clinic name for a Google Maps check";
+    const placeholder = isMissingWebsite ? 'yourclinic.com' : 'Your Practice Name';
 
     nudgeBox.innerHTML =
       `<p class="audit-nudge-label">${label}</p>
        <form class="audit-nudge-form" id="audit-nudge-form">
          <input type="text" id="audit-nudge-input" placeholder="${placeholder}">
-         <button type="submit" class="btn btn-outline">Add</button>
+         <button type="submit" class="btn btn-outline">Analyze Both</button>
        </form>
-       <span class="audit-nudge-skip" id="audit-nudge-skip">Skip. I'll just get in touch.</span>`;
+       <span class="audit-nudge-skip" id="audit-nudge-skip">Skip. Message directly on WhatsApp.</span>`;
 
     const nudgeForm = document.getElementById('audit-nudge-form');
     if (nudgeForm) {
@@ -161,17 +136,17 @@ function initAuditBar() {
     if (skipLink) {
       skipLink.addEventListener('click', () => {
         nudgeBox.innerHTML = '';
-        applyCtaMode('soft', 'Message Us on WhatsApp');
+        applyCtaMode('soft', 'Chat on WhatsApp');
       });
     }
   }
 
   function buildAgainLink() {
     if (auditRunCount >= MAX_RUNS_PER_VISIT) {
-      againBox.innerHTML = `<span>Checked a couple already? Message us for more.</span>`;
+      againBox.innerHTML = `<span>Checked multiple practices? Message us directly for bulk reviews.</span>`;
       return;
     }
-    againBox.innerHTML = `<a id="audit-again-link">Check another business</a>`;
+    againBox.innerHTML = `<a id="audit-again-link" style="cursor:pointer; text-decoration:underline;">Check another practice</a>`;
     const link = document.getElementById('audit-again-link');
     if (link) {
       link.addEventListener('click', () => {
@@ -185,51 +160,59 @@ function initAuditBar() {
   }
 
   function renderResults(data, value) {
-    const list = data.findings || [];
+    const topList = data.topFindings || (data.findings ? data.findings.slice(0, 3) : []);
+    const additional = data.additionalCount !== undefined
+      ? data.additionalCount
+      : Math.max(0, (data.allFindings || data.findings || []).length - topList.length);
     const incomplete = data.hadWebsite === false || data.hadBusinessName === false;
 
     if (data.mismatch) {
-      mismatchBox.innerHTML = `<span class="audit-mismatch-label">Double-check</span><span>${data.mismatch}</span>`;
+      mismatchBox.innerHTML = `<span class="audit-mismatch-label">Notice</span><span>${data.mismatch}</span>`;
       mismatchBox.classList.add('active');
     }
 
-    let topFinding = null;
-    let listToShow = list;
-    if (!data.alreadyChecked && list.length && list[0].flag === 'warn') {
-      topFinding = list[0];
-      listToShow = list.slice(1);
-      urgentBox.innerHTML = `<span class="audit-urgent-label">Most Urgent</span><span>${topFinding.text}</span>`;
+    const topFinding = topList.find(f => f.flag === 'warn') || topList[0];
+    if (!data.alreadyChecked && topFinding && topFinding.flag === 'warn') {
+      urgentBox.innerHTML = `<span class="audit-urgent-label">Urgent Fix Required</span><span>${topFinding.text}</span>`;
       urgentBox.classList.add('active');
     }
 
     findingsList.innerHTML = '';
-    listToShow.forEach((f, i) => {
+    topList.forEach((f, i) => {
       const li = document.createElement('li');
-      li.innerHTML = `<span class="vitals-flag ${f.flag}">${f.flag === 'warn' ? 'Flag' : 'Clear'}</span><span>${f.text}</span>`;
+      const flagText = f.flag === 'warn' ? 'Flag' : 'Passed';
+      const categoryTag = f.category ? `<strong style="margin-right:4px;">[${f.category}]</strong>` : '';
+      
+      li.innerHTML = `<span class="vitals-flag ${f.flag}">${flagText}</span><span>${categoryTag}${f.text}</span>`;
       findingsList.appendChild(li);
       setTimeout(() => li.classList.add('in'), i * 140);
     });
 
-    const remaining = listToShow.filter(f => f.flag === 'warn').length;
-    const hasAnyWarn = list.some(f => f.flag === 'warn');
     if (summary) {
-      summary.textContent = data.alreadyChecked ? '' :
-        remaining > 0 ? `${remaining} more issue${remaining === 1 ? '' : 's'} below.` :
-        'Nothing else urgent. Solid baseline.';
+      if (data.alreadyChecked) {
+        summary.textContent = '';
+      } else {
+        const scoreBadge = data.healthScore ? `<strong>Health Score: ${data.healthScore}/100</strong>` : '';
+        const extraPill = additional > 0 
+          ? ` <span class="additional-pill" style="opacity:0.85; margin-left:8px;">(+${additional} more checks completed)</span>` 
+          : '';
+        summary.innerHTML = `${scoreBadge}${extraPill}`;
+      }
     }
 
-    setCtaLinks(value, topFinding);
+    setCtaLinks(value, topFinding, data.healthScore);
 
+    const hasAnyWarn = (data.allFindings || data.findings || []).some(f => f.flag === 'warn');
     if (data.alreadyChecked) {
-      applyCtaMode('soft', 'Message Us on WhatsApp');
+      applyCtaMode('soft', 'Chat on WhatsApp');
     } else if (incomplete) {
       applyCtaMode('hidden');
     } else if (data.mismatch) {
-      applyCtaMode('soft', 'Message Us on WhatsApp');
+      applyCtaMode('soft', 'Chat on WhatsApp');
     } else if (!hasAnyWarn) {
-      applyCtaMode('soft', 'Questions? Message Us');
+      applyCtaMode('soft', 'Questions? Contact Us');
     } else {
-      applyCtaMode('primary', 'Message Us on WhatsApp');
+      applyCtaMode('primary', 'Fix Top Issues via WhatsApp');
     }
 
     if (!data.alreadyChecked) {
@@ -246,7 +229,7 @@ function initAuditBar() {
   async function runAudit(value) {
     if (auditRunCount >= MAX_RUNS_PER_VISIT) {
       resetPanels();
-      showSoftStop("You've checked a couple of things already. Give it a bit, then try again, or message us directly.");
+      showSoftStop("You have reached the limit of quick checks for this session. Send a WhatsApp message to run full practice diagnostics.");
       return;
     }
     auditRunCount++;
@@ -266,19 +249,19 @@ function initAuditBar() {
       loading.classList.remove('active');
 
       if (!res.ok || data.error) {
-        showError(data.error || 'Something went wrong running that check.');
+        showError(data.error || 'Diagnostic service error. Please try again.');
         return;
       }
 
       if (data.softStop) {
-        showSoftStop(data.message || "You've run a couple of checks already. Give it a few minutes, then try again.");
+        showSoftStop(data.message || "Multiple checks detected recently. Please wait a few minutes before testing another domain.");
         return;
       }
 
       renderResults(data, value);
     } catch (err) {
       loading.classList.remove('active');
-      showError('Something went wrong reaching the audit service.');
+      showError('Unable to connect to the WebCliniQ diagnostic engine.');
     }
   }
 
