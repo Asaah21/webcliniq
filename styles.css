@@ -243,7 +243,7 @@ section { padding: 88px 0; }
 }
 .vitals-list li.in { opacity: 1; transform: translateY(0); }
 .vitals-list li:last-child { border-bottom: none; }
-.audit-results-summary { font-family: var(--font-mono); font-size: 0.82rem; color: var(--muted); margin: 4px 0 16px; }
+.audit-results-summary { font-family: var(--font-mono); font-size: 0.82rem; color: var(--muted); margin: 4px 0 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .vitals-flag {
   font-family: var(--font-mono); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em;
   padding: 3px 8px; border-radius: 4px; white-space: nowrap; margin-top: 2px; flex-shrink: 0;
@@ -286,6 +286,38 @@ section { padding: 88px 0; }
 .audit-again a { color: var(--muted); text-decoration: underline; cursor: pointer; }
 .audit-again a:hover { color: var(--accent); }
 .audit-again span { color: var(--muted); }
+
+/* ---------- Score badge, grade pill, category tags, extra pill ---------- */
+.audit-score-badge { font-family: var(--font-mono); font-size: 0.82rem; color: var(--ink); font-weight: 600; }
+.audit-grade-pill {
+  font-family: var(--font-mono); font-size: 0.72rem; font-weight: 700; padding: 2px 9px;
+  border-radius: 999px; color: var(--white);
+}
+.audit-grade-pill.grade-good { background: var(--accent-teal); }
+.audit-grade-pill.grade-mid { background: var(--accent); }
+.audit-grade-pill.grade-warn { background: var(--accent-warm); }
+.audit-extra-pill {
+  font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted);
+  background: var(--paper-alt); border-radius: 999px; padding: 2px 10px;
+}
+.finding-category {
+  font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--muted); margin-right: 6px;
+}
+
+/* ---------- Email capture ---------- */
+.audit-email-capture { margin-top: 14px; text-align: center; }
+.audit-email-label { font-family: var(--font-mono); font-size: 0.74rem; color: var(--muted); margin-bottom: 8px; }
+.audit-email-form { display: flex; gap: 8px; }
+.audit-email-form input {
+  flex: 1; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: var(--radius);
+  font-family: var(--font-body); font-size: 0.9rem; background: var(--paper); color: var(--ink);
+}
+.audit-email-form input:focus { outline: none; border-color: var(--accent); }
+.audit-email-msg { display: none; font-family: var(--font-mono); font-size: 0.78rem; margin-top: 8px; }
+.audit-email-msg.active { display: block; }
+.audit-email-msg.ok { color: var(--accent-teal); }
+.audit-email-msg.warn { color: var(--accent-warm); }
 
 .audit-nudge-skip { display: block; margin-top: 10px; font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); text-decoration: underline; cursor: pointer; }
 .audit-nudge-skip:hover { color: var(--accent); }
