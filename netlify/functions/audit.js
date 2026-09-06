@@ -1,37 +1,34 @@
 // ============================================
 // WebCliniQ — /.netlify/functions/audit
 // ------------------------------------------
-// Real checks, no simulated data, no invented
-// statistics. Accepts one input field that may
-// contain a business name, a website, or both
-// (comma-separated).
+// Real checks, no simulated data, no invented statistics. One input field that
+// may hold a business name, a website, or both (comma-separated).
 //
-// Two actions:
-//   (default)        run the audit
-//   capture_email     email the already-computed
-//                     results to the visitor via
-//                     Resend — no re-checking, the
-//                     frontend sends back what it
-//                     already has.
+// Actions:
+//   (default)      run the audit
+//   capture_email  email the already-computed results via Resend (no re-check)
 //
-// Requires Netlify env vars:
-//    GOOGLE_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-// Optional:
-//    RESEND_API_KEY   — email capture is skipped
-//                        gracefully (visitor told
-//                        plainly) if this is missing
-//    FROM_EMAIL        — defaults to Resend's shared
-//                        test sender if not set
+// Env: GOOGLE_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+//      RESEND_API_KEY (optional — capture degrades honestly if missing)
+//      FROM_EMAIL     (optional)
 //
-// Supabase tables used:
-//   audits       ip_address, search_query, health_score,
-//                top_findings, all_findings, had_website,
-//                had_business_name, created_at
-//   audit_leads  email, search_query, health_score,
-//                findings, created_at
+// --- Finding contract (Step 1) ---
+// Every finding is:
+//   key         stable machine id           e.g. 'reviews-vs-area'
+//   domain      'listing' | 'website'       (breaks ties in the severity sort)
+//   severity    critical|high|medium|low|clear
+//   title       short human label           e.g. 'Reviews vs. your area'
+//   value       the number/state (short)    e.g. '11'
+//   benchmark   what it's measured against  e.g. 'area median 43'   (optional)
+//   consequence plain "what this costs you" (optional)
+//   fix         the sellable fix            e.g. 'Review system'    (optional)
+//   bump        small +weight from the measured value              (optional)
+//   verdictPhrase  phrasing for the one-line verdict               (optional)
+// `flag`, `category`, `text` are added as back-compat aliases before returning.
 // ============================================
 
 const { createClient } = require('@supabase/supabase-js');
+const { randomUUID } = require('crypto');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -60,6 +57,56 @@ const fetchWithTimeout = async (url, options = {}) => {
   }
 };
 
+/* ---------- Finding helpers ---------- */
+
+const SEVERITY_WEIGHT = { critical: 100, high: 70, medium: 40, low: 20, clear: 0 };
+
+// Severity first; within the same severity, listing findings sort before website
+// findings (GBP breaks ties). `bump` lets a check nudge itself up by how bad the
+// measured value actually is.
+function sortFindings(findings) {
+  return [...findings].sort((a, b) => {
+    const sa = (SEVERITY_WEIGHT[a.severity] ?? 0) + (a.bump || 0);
+    const sb = (SEVERITY_WEIGHT[b.severity] ?? 0) + (b.bump || 0);
+    if (sb !== sa) return sb - sa;
+    return (a.domain === 'listing' ? 0 : 1) - (b.domain === 'listing' ? 0 : 1);
+  });
+}
+
+// Only critical/high move the score. medium/low are "things to tighten" — they
+// surface in "+N more", but with the always-on improvement layer every practice
+// has several, so counting them would peg every score at the floor.
+function computeScore(findings) {
+  let score = 100;
+  for (const f of findings) {
+    if (f.severity === 'critical') score -= 18;
+    else if (f.severity === 'high') score -= 10;
+  }
+  return Math.max(20, Math.min(100, score));
+}
+
+function buildVerdict(sorted) {
+  const flagged = sorted.filter((f) => f.severity !== 'clear');
+  if (!flagged.length) return 'A solid baseline — just a few smaller things to tighten.';
+  const phrase = (f) => f.verdictPhrase || f.title.toLowerCase();
+  if (flagged.length === 1) return `Start with ${phrase(flagged[0])}.`;
+  return `Start with ${phrase(flagged[0])}, then ${phrase(flagged[1])}.`;
+}
+
+// Back-compat: the current script.js reads .flag / .category / .text.
+function withAliases(f) {
+  const parts = [];
+  if (f.value) parts.push(`${f.title}: ${f.value}${f.benchmark ? ` vs ${f.benchmark}` : ''}`);
+  else parts.push(f.title);
+  if (f.consequence) parts.push(f.consequence);
+  return {
+    ...f,
+    flag: f.severity === 'clear' ? 'ok' : 'warn',
+    category: f.title,
+    text: parts.join(' — '),
+  };
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: JSON.stringify({ error: 'Method Not Allowed' }) };
@@ -74,12 +121,10 @@ exports.handler = async (event) => {
 
   const clientIp = event.headers['x-nf-client-connection-ip'] || event.headers['client-ip'] || '0.0.0.0';
 
-  // --- EMAIL CAPTURE: send the already-computed results, don't re-check ---
   if (payload.action === 'capture_email') {
     return await handleEmailCapture(payload);
   }
 
-  // --- AUDIT REQUEST ---
   try {
     const { value } = payload;
     if (!value || typeof value !== 'string') {
@@ -100,49 +145,66 @@ exports.handler = async (event) => {
     }
 
     const { url, businessName } = parseInput(value);
-    const findings = [];
-    let placeTypes = [];
+    const raw = [];
     let mismatch = null;
 
     const placesTarget = businessName || url;
-    let placesMatched = false;
 
-    // Run both checks concurrently. PageSpeed's lab run alone can take ~8s and
-    // Netlify caps synchronous functions at 10s, so they must not run back-to-back.
-    const [pageSpeedResults, placesResults] = await Promise.all([
+    // PageSpeed's lab run runs alone on the clock (up to 18s); the Places branch
+    // runs alongside it.
+    const [siteResult, listingResult] = await Promise.all([
       url ? runPageSpeedCheck(url, GOOGLE_API_KEY) : Promise.resolve(null),
       placesTarget ? runGooglePlacesCheck(placesTarget, GOOGLE_API_KEY) : Promise.resolve(null),
     ]);
 
-    if (pageSpeedResults) findings.push(...pageSpeedResults.findings);
+    let screenshot = null;
+    if (siteResult) {
+      raw.push(...siteResult.findings);
+      screenshot = siteResult.screenshot || null;
+    }
 
-    if (placesResults) {
-      findings.push(...placesResults.findings);
-      placesMatched = placesResults.found;
-      placeTypes = placesResults.types || [];
-
-      if (url && placesResults.website && !urlsMatch(url, placesResults.website)) {
+    let placeTypes = [];
+    let placesMatched = false;
+    let matched = null;
+    if (listingResult) {
+      raw.push(...listingResult.findings);
+      placesMatched = listingResult.found;
+      placeTypes = listingResult.types || [];
+      if (listingResult.found) {
+        matched = { name: listingResult.name || null, website: listingResult.website || null, url: url || null };
+      }
+      if (url && listingResult.website && !urlsMatch(url, listingResult.website)) {
         mismatch = "The website you entered doesn't match what's listed on this Google profile. Double-check you've got the right one.";
       }
     }
 
-    if (!url) findings.push({ category: 'Website', flag: 'warn', text: 'No website given yet. Add one for a speed and visibility check too.' });
+    if (!url) {
+      raw.push({
+        key: 'no-website', domain: 'website', severity: 'high', title: 'Website',
+        value: 'none given', consequence: 'Add one for a speed and visibility check too.',
+        verdictPhrase: 'adding a website',
+      });
+    }
 
     const isHealthcare = detectHealthcareNiche(url, businessName, placeTypes);
-    findings.sort((a, b) => (a.flag === 'warn' ? -1 : 1));
 
-    const healthScore = calculateHealthScore(findings);
-    const letterGrade = calculateLetterGrade(healthScore);
-    const topFindings = findings.slice(0, 3);
-    const additionalCount = Math.max(0, findings.length - 3);
+    const findings = sortFindings(raw).map(withAliases);
+    const score = computeScore(findings);
+    const verdict = buildVerdict(findings);
+
+    let shown = findings.filter((f) => f.severity === 'critical' || f.severity === 'high').slice(0, 5);
+    if (!shown.length) shown = findings.filter((f) => f.severity !== 'clear').slice(0, 3);
+    const moreCount = Math.max(0, findings.filter((f) => f.severity !== 'clear').length - shown.length);
+
+    const publicId = randomUUID().slice(0, 8); // stub — the /r/<id> page + DB column land in Step 3
 
     if (supabase) {
       try {
         const { error } = await supabase.from('audits').insert({
           ip_address: clientIp,
           search_query: value,
-          health_score: healthScore,
-          top_findings: topFindings,
+          health_score: score,
+          top_findings: shown,
           all_findings: findings,
           had_website: !!url,
           had_business_name: !!businessName || placesMatched,
@@ -157,21 +219,33 @@ exports.handler = async (event) => {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        healthScore,
-        letterGrade,
-        topFindings,
-        additionalCount,
-        allFindings: findings,
+        // Step 1 contract
+        publicId,
+        score,
+        verdict,
+        findings,
+        shownCount: shown.length,
+        moreCount,
+        screenshot,
+        matched,
         isHealthcare,
         hadWebsite: !!url,
-        hadBusinessName: !!businessName || placesMatched,
+        hadListing: placesMatched,
         mismatch,
         alreadyChecked: false,
+        // Back-compat aliases for the current frontend (removed once Step 2 lands)
+        healthScore: score,
+        letterGrade: null,
+        topFindings: shown,
+        additionalCount: moreCount,
+        allFindings: findings,
+        hadBusinessName: !!businessName || placesMatched,
       }),
     };
   } catch (err) {
     console.error('audit handler threw:', err.message);
-    return { statusCode: 200, body: JSON.stringify({ findings: [{ flag: 'warn', text: "Something went wrong running that check. Try again in a moment." }], healthScore: null, letterGrade: null, topFindings: [{ flag: 'warn', text: "Something went wrong running that check. Try again in a moment." }], additionalCount: 0, allFindings: [], hadWebsite: false, hadBusinessName: false, mismatch: null, alreadyChecked: false }) };
+    const fallback = [withAliases({ key: 'error', domain: 'website', severity: 'medium', title: 'Check', consequence: 'Something went wrong running that check. Try again in a moment.' })];
+    return { statusCode: 200, body: JSON.stringify({ publicId: null, score: null, verdict: '', findings: fallback, shownCount: 1, moreCount: 0, screenshot: null, matched: null, isHealthcare: null, hadWebsite: false, hadListing: false, mismatch: null, alreadyChecked: false, healthScore: null, letterGrade: null, topFindings: fallback, additionalCount: 0, allFindings: fallback, hadBusinessName: false }) };
   }
 };
 
@@ -184,7 +258,6 @@ async function handleEmailCapture(payload) {
   }
 
   if (!RESEND_API_KEY) {
-    // Never claim success when nothing was actually sent.
     return { statusCode: 200, body: JSON.stringify({ success: false, error: 'not_configured', message: "Email delivery isn't set up yet — message us on WhatsApp instead and we'll send it directly." }) };
   }
 
@@ -230,7 +303,7 @@ async function handleEmailCapture(payload) {
 }
 
 function buildResultsEmailHtml({ search_query, health_score, letter_grade, findings }) {
-  const rows = findings.map(f =>
+  const rows = findings.map((f) =>
     `<tr><td style="padding:10px 0;border-bottom:1px solid #DCE2EA;font-size:14px;color:${f.flag === 'warn' ? '#A8431F' : '#147A65'};font-family:monospace;white-space:nowrap;vertical-align:top;">${f.flag === 'warn' ? 'FLAG' : 'CLEAR'}</td><td style="padding:10px 0 10px 12px;border-bottom:1px solid #DCE2EA;font-size:14px;color:#45566E;">${f.text}</td></tr>`
   ).join('');
 
@@ -253,10 +326,10 @@ function buildResultsEmailHtml({ search_query, health_score, letter_grade, findi
 
 /* ---------- Helpers ---------- */
 function parseInput(input) {
-  const parts = input.split(',').map(s => s.trim());
+  const parts = input.split(',').map((s) => s.trim());
   let url = null, businessName = null;
   const urlPattern = /(https?:\/\/)?([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[^\s]*)?/;
-  parts.forEach(part => {
+  parts.forEach((part) => {
     if (urlPattern.test(part)) { url = part.startsWith('http') ? part : `https://${part}`; }
     else if (part) { businessName = part; }
   });
@@ -265,40 +338,26 @@ function parseInput(input) {
 
 function detectHealthcareNiche(url, businessName, types) {
   const HEALTHCARE_TYPES = ['dentist', 'doctor', 'hospital', 'health', 'physiotherapist', 'pharmacy', 'veterinary_care', 'medical_lab', 'wellness_center', 'spa'];
-  if (types && types.some(t => HEALTHCARE_TYPES.includes(t))) return true;
-  if (types && types.length) return false; // Google gave us a real category and it isn't healthcare
-  // No category data at all (no Places match) — fall back to a soft keyword read rather than guessing "no"
+  if (types && types.some((t) => HEALTHCARE_TYPES.includes(t))) return true;
+  if (types && types.length) return false;
   const keywords = ['clinic', 'dental', 'dentist', 'health', 'medical', 'doctor', 'physio', 'chiro', 'care', 'hospital', 'derma', 'therapy', 'nursing'];
   const content = `${url || ''} ${businessName || ''}`.toLowerCase();
-  return keywords.some(kw => content.includes(kw));
-}
-
-// -12 per warning rather than -18, floor at 20 rather than 10 — a couple of
-// minor flags shouldn't already read as a failing grade.
-function calculateHealthScore(findings) {
-  let score = 100;
-  findings.forEach(f => { if (f.flag === 'warn') score -= 12; });
-  return Math.max(20, Math.min(100, score));
-}
-
-function calculateLetterGrade(score) {
-  if (score >= 90) return 'A';
-  if (score >= 80) return 'B';
-  if (score >= 70) return 'C';
-  if (score >= 60) return 'D';
-  return 'F';
+  return keywords.some((kw) => content.includes(kw));
 }
 
 function urlsMatch(url1, url2) {
-  const clean = u => u.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
+  const clean = (u) => u.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
   return clean(url1) === clean(url2);
 }
 
+/* ---------- Website: PageSpeed Insights ---------- */
 async function runPageSpeedCheck(targetUrl, apiKey) {
   const findings = [];
-  const httpsFinding = targetUrl.startsWith('https://')
-    ? { category: 'Trust', flag: 'ok', text: 'Your site uses a secure connection.' }
-    : { category: 'Trust', flag: 'warn', text: "Your site isn't using a secure connection (HTTPS) — browsers flag this to visitors." };
+  const isHttps = targetUrl.startsWith('https://');
+  const httpsFinding = isHttps
+    ? { key: 'secure-connection', domain: 'website', severity: 'clear', title: 'Secure connection', value: 'HTTPS' }
+    : { key: 'secure-connection', domain: 'website', severity: 'critical', title: 'Secure connection', value: 'no HTTPS', consequence: "Browsers flag your site as 'Not secure' before a patient submits anything.", fix: 'SSL fix', verdictPhrase: 'the missing HTTPS' };
+
   try {
     const endpoint = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(targetUrl)}&strategy=mobile&category=performance&category=seo${apiKey ? `&key=${apiKey}` : ''}`;
     // PSI's lab run is slow and highly variable (8-14s typical, longer for heavy
@@ -309,76 +368,107 @@ async function runPageSpeedCheck(targetUrl, apiKey) {
     const data = await res.json();
 
     if (!data.lighthouseResult || !data.lighthouseResult.categories) {
-      // The slow lab run didn't finish — fall back to Google's real-user field data if present.
       const field = data.loadingExperience && data.loadingExperience.metrics;
       const lcpMs = field && field.LARGEST_CONTENTFUL_PAINT_MS && field.LARGEST_CONTENTFUL_PAINT_MS.percentile;
       if (lcpMs) {
-        const slow = lcpMs > 2500;
-        findings.push({ category: 'Speed', flag: slow ? 'warn' : 'ok',
-          text: `How fast your site loads for real visitors: ${(lcpMs / 1000).toFixed(1)}s to show the main content${slow ? ". Google's bar is 2.5s." : '.'}` });
+        const secs = (lcpMs / 1000).toFixed(1);
+        findings.push(lcpMs > 2500
+          ? { key: 'phone-speed', domain: 'website', severity: 'high', title: 'Phone-site speed', value: `${secs}s`, benchmark: "Google's bar is 2.5s", consequence: 'Slow enough that many phone visitors leave before it loads.', fix: 'Speed Fix', verdictPhrase: 'your phone-site speed' }
+          : { key: 'phone-speed', domain: 'website', severity: 'clear', title: 'Phone-site speed', value: `${secs}s (real-user)` });
       } else {
-        const raw = ((data.error && data.error.message) || '').toLowerCase();
-        let msg = "We couldn't fully check that website right now.";
-        if (raw.includes('failed_document_request') || raw.includes('err_connection') || raw.includes('dns')) {
-          msg = "We couldn't reach that website. Double-check the address is correct and the site is live.";
-        } else if (raw.includes('timeout')) {
-          msg = "That site took too long to respond, so we couldn't finish the check.";
-        }
+        const rawMsg = ((data.error && data.error.message) || '').toLowerCase();
+        let text = "We couldn't fully check that website right now.";
+        if (rawMsg.includes('failed_document_request') || rawMsg.includes('err_connection') || rawMsg.includes('dns')) text = "We couldn't reach that website. Double-check the address is correct and the site is live.";
+        else if (rawMsg.includes('timeout')) text = 'That site took too long to respond, so we couldn\'t finish the check.';
         console.error('PSI failed for', targetUrl, JSON.stringify(data).slice(0, 400));
-        findings.push({ category: 'Website', flag: 'warn', text: msg });
+        findings.push({ key: 'site-check', domain: 'website', severity: 'medium', title: 'Website check', value: 'incomplete', consequence: text });
       }
       findings.push(httpsFinding);
-      return { findings };
+      return { findings, screenshot: null };
     }
 
-    const perfScore = Math.round((data.lighthouseResult.categories.performance?.score || 0) * 100);
-    const seoScore = Math.round((data.lighthouseResult.categories.seo?.score || 0) * 100);
+    const lh = data.lighthouseResult;
+    const perfScore = Math.round((lh.categories.performance?.score || 0) * 100);
+    const seoScore = Math.round((lh.categories.seo?.score || 0) * 100);
+    const crawlable = lh.audits && lh.audits['is-crawlable'];
+    const screenshot = (lh.audits && lh.audits['final-screenshot'] && lh.audits['final-screenshot'].details && lh.audits['final-screenshot'].details.data) || null;
 
-    if (perfScore < 70) findings.push({ category: 'Speed', flag: 'warn', text: `How fast your site loads: ${perfScore}/100. Slow enough that visitors may leave before it loads.` });
-    else findings.push({ category: 'Speed', flag: 'ok', text: `How fast your site loads: ${perfScore}/100.` });
+    if (crawlable && crawlable.score === 0) {
+      findings.push({ key: 'crawlable', domain: 'website', severity: 'critical', title: 'Search visibility', value: 'blocking Google', consequence: 'Your site is telling Google not to list it — it may not appear in search at all.', fix: 'Crawlability fix', verdictPhrase: 'the pages hidden from Google' });
+    }
 
-    if (seoScore < 80) findings.push({ category: 'Google Visibility', flag: 'warn', text: `How easy you are to find on Google: ${seoScore}/100. Missing some basics that help you show up in search.` });
-    else findings.push({ category: 'Google Visibility', flag: 'ok', text: `How easy you are to find on Google: ${seoScore}/100.` });
+    if (perfScore < 70) {
+      findings.push({ key: 'phone-speed', domain: 'website', severity: perfScore < 45 ? 'high' : 'medium', bump: perfScore < 45 ? 10 : 0, title: 'Phone-site speed', value: `${perfScore}/100`, consequence: 'Slow enough that visitors may leave before it loads.', fix: 'Speed Fix', verdictPhrase: 'your phone-site speed' });
+    } else {
+      findings.push({ key: 'phone-speed', domain: 'website', severity: 'clear', title: 'Phone-site speed', value: `${perfScore}/100` });
+    }
+
+    if (seoScore < 80) {
+      findings.push({ key: 'search-basics', domain: 'website', severity: 'medium', title: 'Search basics', value: `${seoScore}/100`, consequence: 'Missing on-page basics that help patients find your specialty on Google.', fix: 'On-page SEO', verdictPhrase: 'your search basics' });
+    } else {
+      findings.push({ key: 'search-basics', domain: 'website', severity: 'clear', title: 'Search basics', value: `${seoScore}/100` });
+    }
 
     findings.push(httpsFinding);
-
-    return { findings };
+    return { findings, screenshot };
   } catch (e) {
-    findings.push({ category: 'Website', flag: 'warn', text: e.name === 'AbortError'
-      ? 'The deep speed check ran long on this site — the full report will include it.'
-      : `We couldn't reach ${targetUrl} to run a check.` });
+    findings.push(e.name === 'AbortError'
+      ? { key: 'phone-speed', domain: 'website', severity: 'low', title: 'Phone-site speed', value: 'not measured', consequence: 'The deep speed check ran long on this site — the full report will include it.' }
+      : { key: 'site-reach', domain: 'website', severity: 'medium', title: 'Website check', value: 'unreachable', consequence: `We couldn't reach ${targetUrl} to run a check.` });
     findings.push(httpsFinding);
-    return { findings };
+    return { findings, screenshot: null };
   }
 }
 
+/* ---------- Listing: Google Places ---------- */
 async function runGooglePlacesCheck(targetQuery, apiKey) {
   const findings = [];
   if (!apiKey) return { findings, website: null, found: false, types: [] };
 
   try {
-    let cleanQuery = targetQuery.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].split('.')[0];
-    const searchUrl = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(cleanQuery)}&inputtype=textquery&fields=place_id,name,rating,user_ratings_total,website,types,opening_hours,photos&key=${apiKey}`;
+    const cleanQuery = targetQuery.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].split('.')[0];
+    const fields = 'place_id,name,rating,user_ratings_total,website,types,opening_hours,photos,geometry';
+    const searchUrl = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(cleanQuery)}&inputtype=textquery&fields=${fields}&key=${apiKey}`;
     const res = await fetchWithTimeout(searchUrl);
     const data = await res.json();
-    const candidate = data.candidates?.[0];
+    const candidate = data.candidates && data.candidates[0];
 
     if (!candidate) {
-      findings.push({ category: 'Google Listing', flag: 'warn', text: 'No Google listing found under this name — that alone is likely costing you patients.' });
+      findings.push({ key: 'no-listing', domain: 'listing', severity: 'critical', title: 'Google Business Profile', value: 'not found', consequence: 'No Google listing found under this name — patients searching Maps for a nearby practice never see you.', fix: 'Listing setup + verification', verdictPhrase: 'your missing Google listing' });
       return { findings, website: null, found: false, types: [] };
     }
 
-    const rating = candidate.rating || 0, reviews = candidate.user_ratings_total || 0;
+    const rating = candidate.rating || 0;
+    const reviews = candidate.user_ratings_total || 0;
 
-    if (!reviews || reviews < 5) findings.push({ category: 'Reviews', flag: 'warn', text: reviews ? `${reviews} review${reviews === 1 ? '' : 's'} at ${rating}★ on Google. People compare you on reviews before anything else.` : 'Your Google listing has no reviews yet.' });
-    else findings.push({ category: 'Reviews', flag: 'ok', text: `${reviews} reviews at ${rating}★ on Google. A solid base.` });
+    if (!reviews) {
+      findings.push({ key: 'reviews', domain: 'listing', severity: 'high', title: 'Google reviews', value: 'none yet', consequence: 'Patients compare practices on reviews before anything else.', fix: 'Review system', verdictPhrase: 'your reviews' });
+    } else if (reviews < 5) {
+      findings.push({ key: 'reviews', domain: 'listing', severity: 'medium', title: 'Google reviews', value: `${reviews} · ${rating}★`, consequence: 'Thin next to nearby practices — patients notice.', fix: 'Review system', verdictPhrase: 'your reviews' });
+    } else {
+      findings.push({ key: 'reviews', domain: 'listing', severity: 'clear', title: 'Google reviews', value: `${reviews} · ${rating}★` });
+    }
 
-    if (!candidate.opening_hours) findings.push({ category: 'Google Listing', flag: 'warn', text: "No hours listed on your Google listing — people can't tell if you're open right now." });
-    if (!candidate.photos || !candidate.photos.length) findings.push({ category: 'Google Listing', flag: 'warn', text: 'No photos on your Google listing — listings with photos get more clicks.' });
+    if (!candidate.opening_hours) {
+      findings.push({ key: 'listing-hours', domain: 'listing', severity: 'medium', title: 'Listing hours', value: 'not set', consequence: "Patients can't tell if you're open right now.", fix: 'Profile fill', verdictPhrase: 'your missing listing hours' });
+    }
+    if (!candidate.photos || !candidate.photos.length) {
+      findings.push({ key: 'listing-photos', domain: 'listing', severity: 'low', title: 'Listing photos', value: 'none', consequence: 'Listings with photos get more clicks and calls.', fix: 'Photo set' });
+    }
 
-    return { findings, website: candidate.website || null, found: true, types: candidate.types || [] };
+    return {
+      findings,
+      website: candidate.website || null,
+      found: true,
+      types: candidate.types || [],
+      name: candidate.name || null,
+      rating,
+      reviews,
+      placeId: candidate.place_id || null,
+      location: (candidate.geometry && candidate.geometry.location) || null,
+    };
   } catch (e) {
-    findings.push({ category: 'Google Listing', flag: 'warn', text: "Couldn't check your Google listing right now. Try again shortly." });
+    findings.push({ key: 'listing-check', domain: 'listing', severity: 'medium', title: 'Google listing', value: 'not checked', consequence: "Couldn't check your Google listing right now. Try again shortly." });
     return { findings, website: null, found: false, types: [] };
   }
 }
