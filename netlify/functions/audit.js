@@ -301,8 +301,10 @@ async function runPageSpeedCheck(targetUrl, apiKey) {
     : { category: 'Trust', flag: 'warn', text: "Your site isn't using a secure connection (HTTPS) — browsers flag this to visitors." };
   try {
     const endpoint = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(targetUrl)}&strategy=mobile&category=performance&category=seo${apiKey ? `&key=${apiKey}` : ''}`;
-    // PSI's lab run is slow (often 7-9s); give it room but stay under Netlify's 10s function cap.
-    const res = await fetchWithTimeout(endpoint, { timeout: 9000 });
+    // PSI's lab run is slow and highly variable (8-14s typical, longer for heavy
+    // sites). Give it 18s; it runs alone on the clock (Places is parallel) and
+    // Netlify's synchronous cap here is ~26s.
+    const res = await fetchWithTimeout(endpoint, { timeout: 18000 });
     if (!res.ok) throw new Error(`PSI HTTP ${res.status}`);
     const data = await res.json();
 
