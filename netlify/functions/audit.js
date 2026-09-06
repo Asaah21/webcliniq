@@ -104,16 +104,19 @@ exports.handler = async (event) => {
     let placeTypes = [];
     let mismatch = null;
 
-    if (url) {
-      const pageSpeedResults = await runPageSpeedCheck(url, GOOGLE_API_KEY);
-      findings.push(...pageSpeedResults.findings);
-    }
-
     const placesTarget = businessName || url;
     let placesMatched = false;
 
-    if (placesTarget) {
-      const placesResults = await runGooglePlacesCheck(placesTarget, GOOGLE_API_KEY);
+    // Run both checks concurrently. PageSpeed's lab run alone can take ~8s and
+    // Netlify caps synchronous functions at 10s, so they must not run back-to-back.
+    const [pageSpeedResults, placesResults] = await Promise.all([
+      url ? runPageSpeedCheck(url, GOOGLE_API_KEY) : Promise.resolve(null),
+      placesTarget ? runGooglePlacesCheck(placesTarget, GOOGLE_API_KEY) : Promise.resolve(null),
+    ]);
+
+    if (pageSpeedResults) findings.push(...pageSpeedResults.findings);
+
+    if (placesResults) {
       findings.push(...placesResults.findings);
       placesMatched = placesResults.found;
       placeTypes = placesResults.types || [];
@@ -293,22 +296,36 @@ function urlsMatch(url1, url2) {
 
 async function runPageSpeedCheck(targetUrl, apiKey) {
   const findings = [];
+  const httpsFinding = targetUrl.startsWith('https://')
+    ? { category: 'Trust', flag: 'ok', text: 'Your site uses a secure connection.' }
+    : { category: 'Trust', flag: 'warn', text: "Your site isn't using a secure connection (HTTPS) — browsers flag this to visitors." };
   try {
     const endpoint = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(targetUrl)}&strategy=mobile&category=performance&category=seo${apiKey ? `&key=${apiKey}` : ''}`;
-    const res = await fetchWithTimeout(endpoint);
+    // PSI's lab run is slow (often 7-9s); give it room but stay under Netlify's 10s function cap.
+    const res = await fetchWithTimeout(endpoint, { timeout: 9000 });
     if (!res.ok) throw new Error(`PSI HTTP ${res.status}`);
     const data = await res.json();
 
     if (!data.lighthouseResult || !data.lighthouseResult.categories) {
-      const raw = ((data.error && data.error.message) || '').toLowerCase();
-      let msg = "We couldn't fully check that website right now.";
-      if (raw.includes('failed_document_request') || raw.includes('err_connection') || raw.includes('dns')) {
-        msg = "We couldn't reach that website. Double-check the address is correct and the site is live.";
-      } else if (raw.includes('timeout')) {
-        msg = "That site took too long to respond, so we couldn't finish the check.";
+      // The slow lab run didn't finish — fall back to Google's real-user field data if present.
+      const field = data.loadingExperience && data.loadingExperience.metrics;
+      const lcpMs = field && field.LARGEST_CONTENTFUL_PAINT_MS && field.LARGEST_CONTENTFUL_PAINT_MS.percentile;
+      if (lcpMs) {
+        const slow = lcpMs > 2500;
+        findings.push({ category: 'Speed', flag: slow ? 'warn' : 'ok',
+          text: `How fast your site loads for real visitors: ${(lcpMs / 1000).toFixed(1)}s to show the main content${slow ? ". Google's bar is 2.5s." : '.'}` });
+      } else {
+        const raw = ((data.error && data.error.message) || '').toLowerCase();
+        let msg = "We couldn't fully check that website right now.";
+        if (raw.includes('failed_document_request') || raw.includes('err_connection') || raw.includes('dns')) {
+          msg = "We couldn't reach that website. Double-check the address is correct and the site is live.";
+        } else if (raw.includes('timeout')) {
+          msg = "That site took too long to respond, so we couldn't finish the check.";
+        }
+        console.error('PSI failed for', targetUrl, JSON.stringify(data).slice(0, 400));
+        findings.push({ category: 'Website', flag: 'warn', text: msg });
       }
-      console.error('PSI failed for', targetUrl, JSON.stringify(data));
-      findings.push({ category: 'Website', flag: 'warn', text: msg });
+      findings.push(httpsFinding);
       return { findings };
     }
 
@@ -321,12 +338,14 @@ async function runPageSpeedCheck(targetUrl, apiKey) {
     if (seoScore < 80) findings.push({ category: 'Google Visibility', flag: 'warn', text: `How easy you are to find on Google: ${seoScore}/100. Missing some basics that help you show up in search.` });
     else findings.push({ category: 'Google Visibility', flag: 'ok', text: `How easy you are to find on Google: ${seoScore}/100.` });
 
-    if (!targetUrl.startsWith('https://')) findings.push({ category: 'Trust', flag: 'warn', text: 'Your site isn\'t using a secure connection (HTTPS) — browsers flag this to visitors.' });
-    else findings.push({ category: 'Trust', flag: 'ok', text: 'Your site uses a secure connection.' });
+    findings.push(httpsFinding);
 
     return { findings };
   } catch (e) {
-    findings.push({ category: 'Website', flag: 'warn', text: `We couldn't reach ${targetUrl} to run a check.` });
+    findings.push({ category: 'Website', flag: 'warn', text: e.name === 'AbortError'
+      ? 'The deep speed check ran long on this site — the full report will include it.'
+      : `We couldn't reach ${targetUrl} to run a check.` });
+    findings.push(httpsFinding);
     return { findings };
   }
 }
