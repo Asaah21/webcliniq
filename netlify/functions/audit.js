@@ -441,6 +441,17 @@ async function runWebsiteContentCheck(targetUrl) {
     return { findings, html: '', finalUrl };
   }
 
+  // Client-rendered sites (React/Next/Vue SPAs) serve a near-empty shell — the
+  // real content never appears in this HTML. Parsing it would emit false
+  // "not found" findings, so skip the content checks entirely.
+  const visibleText = html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const scriptCount = (html.match(/<script\b/gi) || []).length;
+  const looksLikeSpaShell = visibleText.length < 800 && (/\bid\s*=\s*["'](root|__next|app|__nuxt)["']/i.test(html) || scriptCount > 12);
+  if (looksLikeSpaShell) {
+    console.error('homepage looks like a client-rendered shell, skipping content checks:', targetUrl);
+    return { findings, html, finalUrl, spa: true };
+  }
+
   checkContactFriction(html, findings);
   checkImprovementLayer(html, findings, finalUrl);
   await checkBrokenLinks(html, finalUrl, findings);
