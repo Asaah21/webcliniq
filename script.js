@@ -47,8 +47,19 @@ function initFAQ() {
   });
 }
 
+/* ---------- helpers ---------- */
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function stripProto(u) {
+  return String(u || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+}
+function prefersReducedMotion() {
+  return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 /* ============================================
-   Audit bar
+   Audit bar + results panel
    ============================================ */
 function initAuditBar() {
   const form = document.getElementById('audit-form');
@@ -56,14 +67,15 @@ function initAuditBar() {
   const loading = document.getElementById('audit-loading');
   const errorBox = document.getElementById('audit-error');
   const results = document.getElementById('audit-results');
+  const matchEl = document.getElementById('audit-match');
+  const dialEl = document.getElementById('audit-dial');
+  const scoreEl = document.getElementById('audit-score');
+  const verdictEl = document.getElementById('audit-verdict');
+  const noticeEl = document.getElementById('audit-notice');
   const findingsList = document.getElementById('audit-findings');
-  const urgentBox = document.getElementById('audit-urgent');
-  const mismatchBox = document.getElementById('audit-mismatch');
-  const summary = document.getElementById('audit-results-summary');
-  const ctaGroup = document.getElementById('audit-cta-group');
-  const ctaLink = document.getElementById('audit-cta-link');
-  const nudgeBox = document.getElementById('audit-nudge');
-  const againBox = document.getElementById('audit-again');
+  const moreEl = document.getElementById('audit-more');
+  const ctaEl = document.getElementById('audit-cta');
+  const againEl = document.getElementById('audit-again');
   if (!form) return;
 
   const WHATSAPP_NUMBER = '233538665715';
@@ -71,12 +83,11 @@ function initAuditBar() {
   let auditRunCount = 0;
   let loadingInterval;
 
-  // Plain language only — no service/API names, matches the rest of the site.
   const loadingMessages = [
-    'Running your audit…',
-    'Checking your site speed…',
+    "Checking what's public about your practice…",
     'Looking up your Google listing…',
-    'Almost done…',
+    'Checking your site on a phone…',
+    'Sorting what matters most…',
   ];
 
   function startLoadingTicker() {
@@ -87,9 +98,8 @@ function initAuditBar() {
     loadingInterval = setInterval(() => {
       step++;
       if (step < loadingMessages.length) textEl.textContent = loadingMessages[step];
-    }, 1800);
+    }, 2200);
   }
-
   function stopLoadingTicker() {
     clearInterval(loadingInterval);
     loading.classList.remove('active');
@@ -98,13 +108,12 @@ function initAuditBar() {
   function resetPanels() {
     errorBox.classList.remove('active');
     results.classList.remove('active');
-    nudgeBox.innerHTML = '';
-    againBox.innerHTML = '';
-    urgentBox.classList.remove('active'); urgentBox.innerHTML = '';
-    mismatchBox.classList.remove('active'); mismatchBox.innerHTML = '';
-    ctaGroup.classList.remove('hidden', 'soft');
-    const existingEmailCta = document.getElementById('audit-email-capture');
-    if (existingEmailCta) existingEmailCta.remove();
+    [matchEl, noticeEl, moreEl, againEl].forEach(el => { if (el) { el.hidden = true; el.innerHTML = ''; } });
+    if (findingsList) findingsList.innerHTML = '';
+    if (dialEl) dialEl.innerHTML = '';
+    if (scoreEl) scoreEl.innerHTML = '';
+    if (verdictEl) verdictEl.textContent = '';
+    if (ctaEl) ctaEl.innerHTML = '';
   }
 
   function showError(message) {
@@ -114,196 +123,172 @@ function initAuditBar() {
     if (hint) hint.style.display = '';
   }
 
-  function gradeClass(grade) {
-    if (grade === 'A' || grade === 'B') return 'grade-good';
-    if (grade === 'C') return 'grade-mid';
-    return 'grade-warn';
+  function resetToForm() {
+    results.classList.remove('active');
+    form.classList.remove('hidden');
+    if (hint) hint.style.display = '';
+    const input = document.getElementById('audit-input');
+    if (input) { input.value = ''; input.focus(); }
   }
 
-  function renderEmailCapture(value, data) {
-    const wrap = document.createElement('div');
-    wrap.id = 'audit-email-capture';
-    wrap.className = 'audit-email-capture';
-    wrap.innerHTML = `
-      <p class="audit-email-label">Want these results in your inbox?</p>
-      <form class="audit-email-form" id="audit-email-form">
-        <input type="email" id="audit-email-input" placeholder="you@yourpractice.com" required>
-        <button type="submit" class="btn btn-outline">Email Me This</button>
-      </form>
-      <span class="audit-email-msg" id="audit-email-msg"></span>
-    `;
-    ctaGroup.appendChild(wrap);
+  /* ---- score dial ---- */
+  function renderDial(score) {
+    const r = 42;
+    const circ = 2 * Math.PI * r;
+    const target = circ * (1 - Math.max(0, Math.min(100, score)) / 100);
+    // Number is final immediately; the arc sweeps in via its CSS transition.
+    dialEl.innerHTML =
+      `<svg viewBox="0 0 96 96" width="96" height="96" aria-hidden="true">
+         <circle class="audit-dial-track" cx="48" cy="48" r="${r}"></circle>
+         <circle class="audit-dial-arc" cx="48" cy="48" r="${r}" stroke-dasharray="${circ}" stroke-dashoffset="${circ}"></circle>
+       </svg>
+       <span class="audit-dial-num">${score}</span>`;
+    const arc = dialEl.querySelector('.audit-dial-arc');
+    if (prefersReducedMotion()) arc.style.strokeDashoffset = target;
+    else setTimeout(() => { arc.style.strokeDashoffset = target; }, 40);
+  }
 
-    document.getElementById('audit-email-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const email = document.getElementById('audit-email-input').value.trim();
-      const formEl = document.getElementById('audit-email-form');
-      const btn = formEl.querySelector('button');
-      const msgEl = document.getElementById('audit-email-msg');
-      btn.textContent = 'Sending…';
-      btn.disabled = true;
+  /* ---- one finding row ---- */
+  function findingRow(f, i) {
+    const urgent = f.severity === 'critical' || f.severity === 'high';
+    const li = document.createElement('li');
+    li.className = 'af-row';
+    const fig = f.value
+      ? `<span class="af-fig">${escapeHtml(f.value)}${f.benchmark ? `<br><span class="af-bench">vs ${escapeHtml(f.benchmark)}</span>` : ''}</span>`
+      : '';
+    li.innerHTML =
+      `<span class="af-dot${urgent ? ' urgent' : ''}"></span>
+       <span class="af-body">
+         <span class="af-title">${escapeHtml(f.title)}</span>
+         ${f.consequence ? `<span class="af-desc">${escapeHtml(f.consequence)}</span>` : ''}
+       </span>
+       ${fig}`;
+    findingsList.appendChild(li);
+    if (prefersReducedMotion()) li.classList.add('in');
+    else setTimeout(() => li.classList.add('in'), 80 + i * 90);
+  }
 
-      try {
-        const res = await fetch('/.netlify/functions/audit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'capture_email',
-            email,
-            search_query: value,
-            health_score: data.healthScore,
-            letter_grade: data.letterGrade,
-            findings: data.allFindings,
-          }),
-        });
-        const result = await res.json();
+  /* ---- CTA ladder: email report -> WhatsApp ---- */
+  function renderCta(value, topFix, data) {
+    const waText = topFix
+      ? `Hi WebCliniQ. I ran a check for "${value}". The main thing flagged: ${topFix.title}${topFix.value ? ` (${topFix.value})` : ''}. I'd like to get this sorted.`
+      : `Hi WebCliniQ. I ran a check for "${value}" and wanted to follow up.`;
+    const wa = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(waText)}`;
 
-        if (result.success) {
-          formEl.style.display = 'none';
-          msgEl.textContent = 'Sent. Check your inbox.';
-          msgEl.classList.add('active', 'ok');
-        } else {
-          msgEl.textContent = result.message || "Couldn't send that right now. Try WhatsApp instead.";
-          msgEl.classList.add('active', 'warn');
-          btn.textContent = 'Email Me This';
-          btn.disabled = false;
-        }
-      } catch (err) {
-        msgEl.textContent = "Couldn't send that right now. Try WhatsApp instead.";
-        msgEl.classList.add('active', 'warn');
-        btn.textContent = 'Email Me This';
+    ctaEl.innerHTML =
+      `<form class="audit-email-form" id="audit-email-form">
+         <input type="email" id="audit-email-input" placeholder="you@yourpractice.com" required aria-label="Your email">
+         <button type="submit" class="btn btn-primary">Email me the full report</button>
+       </form>
+       <span class="audit-email-msg" id="audit-email-msg" hidden></span>
+       <a class="audit-cta-wa" href="${wa}" target="_blank" rel="noopener">Message on WhatsApp about the top fix</a>`;
+
+    document.getElementById('audit-email-form').addEventListener('submit', (e) => onEmailSubmit(e, value, data));
+  }
+
+  async function onEmailSubmit(e, value, data) {
+    e.preventDefault();
+    const email = document.getElementById('audit-email-input').value.trim();
+    const formEl = e.currentTarget;
+    const btn = formEl.querySelector('button');
+    const msg = document.getElementById('audit-email-msg');
+    btn.textContent = 'Sending…';
+    btn.disabled = true;
+    try {
+      const res = await fetch('/.netlify/functions/audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'capture_email',
+          email,
+          search_query: value,
+          health_score: data.score,
+          letter_grade: null,
+          findings: data.findings,
+        }),
+      });
+      const result = await res.json();
+      if (result.success) {
+        formEl.hidden = true;
+        msg.textContent = 'Sent. Check your inbox.';
+        msg.className = 'audit-email-msg ok';
+        msg.hidden = false;
+      } else {
+        msg.textContent = result.message || "Couldn't send that right now — message on WhatsApp instead.";
+        msg.className = 'audit-email-msg warn';
+        msg.hidden = false;
+        btn.textContent = 'Email me the full report';
         btn.disabled = false;
       }
-    });
-  }
-
-  function setCtaLinks(value, topFinding, data) {
-    const waText = topFinding
-      ? `Hi WebCliniQ. I ran an audit for "${value}". Top issue: ${topFinding.text} I'd like to get this fixed.`
-      : `Hi WebCliniQ. I ran an audit for "${value}" and wanted to follow up.`;
-    if (ctaLink) ctaLink.href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(waText)}`;
-  }
-
-  function applyCtaMode(mode, label) {
-    ctaGroup.classList.remove('hidden', 'soft');
-    if (mode === 'hidden') ctaGroup.classList.add('hidden');
-    if (mode === 'soft') ctaGroup.classList.add('soft');
-    if (ctaLink && label) ctaLink.textContent = label;
-  }
-
-  function buildNudge(data, value) {
-    const isMissingWebsite = data.hadWebsite === false;
-    const label = isMissingWebsite ? 'Add your website for a fuller picture' : 'Add your business name for a Google check';
-    const placeholder = isMissingWebsite ? 'yourclinic.com' : 'Your Business Name';
-
-    nudgeBox.innerHTML =
-      `<p class="audit-nudge-label">${label}</p>
-       <form class="audit-nudge-form" id="audit-nudge-form">
-         <input type="text" id="audit-nudge-input" placeholder="${placeholder}">
-         <button type="submit" class="btn btn-outline">Add</button>
-       </form>
-       <span class="audit-nudge-skip" id="audit-nudge-skip">Skip. I'll just get in touch.</span>`;
-
-    const nudgeForm = document.getElementById('audit-nudge-form');
-    if (nudgeForm) {
-      nudgeForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const extra = document.getElementById('audit-nudge-input').value.trim();
-        if (extra) runAudit(`${value}, ${extra}`);
-      });
-    }
-    const skipLink = document.getElementById('audit-nudge-skip');
-    if (skipLink) {
-      skipLink.addEventListener('click', () => {
-        nudgeBox.innerHTML = '';
-        applyCtaMode('soft', 'Message Us on WhatsApp');
-      });
+    } catch (err) {
+      msg.textContent = "Couldn't send that right now — message on WhatsApp instead.";
+      msg.className = 'audit-email-msg warn';
+      msg.hidden = false;
+      btn.textContent = 'Email me the full report';
+      btn.disabled = false;
     }
   }
 
   function buildAgainLink() {
     if (auditRunCount >= MAX_RUNS_PER_VISIT) {
-      againBox.innerHTML = `<span>Checked a few already? Message us for more.</span>`;
-      return;
+      againEl.innerHTML = '<span>Checked a few already? Message us for more.</span>';
+    } else {
+      againEl.innerHTML = '<a id="audit-again-link">Check another practice</a>';
+      const link = document.getElementById('audit-again-link');
+      if (link) link.addEventListener('click', resetToForm);
     }
-    againBox.innerHTML = `<a id="audit-again-link">Check another business</a>`;
-    const link = document.getElementById('audit-again-link');
-    if (link) {
-      link.addEventListener('click', () => {
-        results.classList.remove('active');
-        form.classList.remove('hidden');
-        if (hint) hint.style.display = '';
-        const input = document.getElementById('audit-input');
-        if (input) { input.value = ''; input.focus(); }
-      });
-    }
+    againEl.hidden = false;
   }
 
+  /* ---- render a full result ---- */
   function renderResults(data, value) {
-    const list = data.allFindings || [];
-    const incomplete = data.hadWebsite === false || data.hadBusinessName === false;
-
-    if (data.isHealthcare === false) {
-      mismatchBox.innerHTML = `<span class="audit-mismatch-label">Heads up</span><span>WebCliniQ is built for healthcare practices. We'll still show you what we found.</span>`;
-      mismatchBox.classList.add('active');
-    }
-    if (data.mismatch) {
-      mismatchBox.innerHTML = `<span class="audit-mismatch-label">Double-check</span><span>${data.mismatch}</span>`;
-      mismatchBox.classList.add('active');
+    // match line
+    if (data.matched && data.matched.name) {
+      const site = data.matched.website ? ` &rarr; <b>${escapeHtml(stripProto(data.matched.website))}</b>` : '';
+      matchEl.innerHTML = `We matched <b>${escapeHtml(data.matched.name)}</b>${site}. <a id="audit-notyou">Not you?</a>`;
+      matchEl.hidden = false;
     }
 
-    let topFinding = null;
-    let listToShow = list;
-    if (list.length && list[0].flag === 'warn') {
-      topFinding = list[0];
-      listToShow = list.slice(1);
-      urgentBox.innerHTML = `<span class="audit-urgent-label">Most Urgent</span><span>${topFinding.text}</span>`;
-      urgentBox.classList.add('active');
+    // score + verdict + dial
+    const name = (data.matched && data.matched.name) || value || '';
+    scoreEl.innerHTML = `<b>${data.score != null ? data.score : '&mdash;'}</b> / 100${name ? ` &middot; ${escapeHtml(name)}` : ''}`;
+    verdictEl.textContent = data.verdict || '';
+    if (data.score != null) renderDial(data.score);
+
+    // notice (non-healthcare / website mismatch)
+    let notice = '';
+    if (data.isHealthcare === false) notice = "WebCliniQ is built for healthcare practices — here's what we found anyway.";
+    if (data.mismatch) notice = data.mismatch;
+    if (notice) { noticeEl.textContent = notice; noticeEl.hidden = false; }
+
+    // findings: the priority ones, then up to 2 "clear" reassurances
+    const shown = (data.topFindings || []).slice(0, 5);
+    const clears = (data.findings || []).filter(f => f.severity === 'clear').slice(0, 2);
+    [...shown, ...clears].forEach((f, i) => findingRow(f, i));
+
+    // "+N more" — a contact hook, not an expander
+    const more = data.moreCount || 0;
+    if (more > 0) {
+      moreEl.innerHTML = `<b>${more} more ${more === 1 ? 'issue' : 'issues'} found</b> — smaller things like copy and missing pages. Email yourself the full report below to see them all, each with the fix.`;
+      moreEl.hidden = false;
     }
 
-    findingsList.innerHTML = '';
-    listToShow.forEach((f, i) => {
-      const li = document.createElement('li');
-      const categoryTag = f.category ? `<span class="finding-category">${f.category}</span>` : '';
-      li.innerHTML = `<span class="vitals-flag ${f.flag}">${f.flag === 'warn' ? 'Flag' : 'Clear'}</span><span>${categoryTag}${f.text}</span>`;
-      findingsList.appendChild(li);
-      setTimeout(() => li.classList.add('in'), i * 140);
-    });
+    // CTA
+    const topFix = shown.find(f => f.severity === 'critical' || f.severity === 'high') || shown[0] || null;
+    renderCta(value, topFix, data);
 
-    const remaining = listToShow.filter(f => f.flag === 'warn').length;
-    if (summary && data.healthScore != null) {
-      summary.innerHTML = `<span class="audit-score-badge">Score: ${data.healthScore}/100</span><span class="audit-grade-pill ${gradeClass(data.letterGrade)}">${data.letterGrade}</span>${remaining > 0 ? `<span class="audit-extra-pill">${remaining} more issue${remaining === 1 ? '' : 's'}</span>` : ''}`;
-    }
-
-    setCtaLinks(value, topFinding, data);
-
-    const hasAnyWarn = list.some(f => f.flag === 'warn');
-    if (incomplete) {
-      applyCtaMode('hidden');
-    } else if (data.mismatch) {
-      applyCtaMode('soft', 'Message Us on WhatsApp');
-    } else if (!hasAnyWarn) {
-      applyCtaMode('soft', 'Questions? Message Us');
-    } else {
-      applyCtaMode('primary', 'Message Us About These Issues');
-    }
-
-    if (incomplete) {
-      buildNudge(data, value);
-    } else {
-      buildAgainLink();
-      renderEmailCapture(value, data);
-    }
-
+    buildAgainLink();
     results.classList.add('active');
+
+    const notYou = document.getElementById('audit-notyou');
+    if (notYou) notYou.addEventListener('click', resetToForm);
   }
 
   async function runAudit(value) {
     if (auditRunCount >= MAX_RUNS_PER_VISIT) {
       resetPanels();
+      verdictEl.textContent = "You've checked a few things already. Give it a bit, then try again, or message us directly.";
       results.classList.add('active');
-      if (summary) summary.textContent = "You've checked a few things already. Give it a bit, then try again, or message us directly.";
-      ctaGroup.classList.add('hidden');
       return;
     }
     auditRunCount++;
@@ -327,9 +312,8 @@ function initAuditBar() {
         return;
       }
       if (data.softStop) {
+        verdictEl.textContent = data.message || "You've run a few checks already. Give it a few minutes, then try again.";
         results.classList.add('active');
-        if (summary) summary.textContent = data.message;
-        ctaGroup.classList.add('hidden');
         return;
       }
       renderResults(data, value);
