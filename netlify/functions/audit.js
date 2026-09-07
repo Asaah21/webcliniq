@@ -558,22 +558,41 @@ async function checkBrokenLinks(html, baseUrl, findings) {
 }
 
 /* ---------- Listing: Google Places ---------- */
+// A typed name must plausibly overlap the matched listing's name. Skipped for
+// single-token queries derived from a domain (e.g. "aspendental").
+function nameLooksLikeMatch(typed, found) {
+  if (!found) return false;
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 1);
+  const t = norm(typed);
+  if (t.length < 2) return true;
+  const f = new Set(norm(found));
+  const overlap = t.filter((w) => f.has(w)).length;
+  return overlap >= Math.max(1, Math.ceil(t.length * 0.4));
+}
+
 async function runGooglePlacesCheck(targetQuery, apiKey) {
   const findings = [];
   if (!apiKey) return { findings, website: null, found: false, types: [] };
 
   try {
-    const cleanQuery = targetQuery.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].split('.')[0];
-    const fields = 'place_id,name,rating,user_ratings_total,website,types,opening_hours,photos,geometry';
+    const cleanQuery = targetQuery.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].split('.')[0].trim();
+    // findplacefromtext only accepts Basic + Atmosphere fields. `website`,
+    // full `opening_hours` and `reviews` need a follow-up Place Details call.
+    const fields = 'place_id,name,rating,user_ratings_total,types,photos,geometry';
     const searchUrl = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(cleanQuery)}&inputtype=textquery&fields=${fields}&key=${apiKey}`;
     const res = await fetchWithTimeout(searchUrl);
     const data = await res.json();
-    console.error('Places findplacefromtext status:', data.status, data.error_message || '', 'candidates:', (data.candidates || []).length);
-    const candidate = data.candidates && data.candidates[0];
 
-    if (!candidate) {
+    if (data.status && data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+      console.error('Places findplacefromtext error:', data.status, data.error_message || '');
+      findings.push({ key: 'listing-check', domain: 'listing', severity: 'medium', title: 'Google listing', value: 'not checked', consequence: "Couldn't check your Google listing right now. Try again shortly." });
+      return { findings, website: null, found: false, types: [], _placesStatus: data.status };
+    }
+
+    const candidate = data.candidates && data.candidates[0];
+    if (!candidate || !nameLooksLikeMatch(cleanQuery, candidate.name)) {
       findings.push({ key: 'no-listing', domain: 'listing', severity: 'critical', title: 'Google Business Profile', value: 'not found', consequence: 'No Google listing found under this name — patients searching Maps for a nearby practice never see you.', fix: 'Listing setup + verification', verdictPhrase: 'your missing Google listing' });
-      return { findings, website: null, found: false, types: [], _placesStatus: data.status || 'NO_STATUS' };
+      return { findings, website: null, found: false, types: [], _placesStatus: data.status || 'ZERO_RESULTS' };
     }
 
     const rating = candidate.rating || 0;
@@ -582,11 +601,15 @@ async function runGooglePlacesCheck(targetQuery, apiKey) {
     const location = (candidate.geometry && candidate.geometry.location) || null;
     const nearbyType = pickNearbyType(candidate.types);
 
-    // Chained after the match, run together, still parallel to PageSpeed.
-    const [reviewAgeDays, nearbyMedian] = await Promise.all([
-      placeId ? getRecentReviewAgeDays(placeId, apiKey) : Promise.resolve(null),
+    // Place Details (website + real hours + review recency) and the nearby
+    // median run together, still parallel to PageSpeed.
+    const [details, nearbyMedian] = await Promise.all([
+      placeId ? getPlaceDetails(placeId, apiKey) : Promise.resolve({}),
       (location && nearbyType) ? getNearbyReviewMedian(location, nearbyType, placeId, apiKey) : Promise.resolve(null),
     ]);
+    const website = details.website || null;
+    const hoursSet = !!(details.openingHours && (details.openingHours.weekday_text || details.openingHours.periods));
+    const reviewAgeDays = details.newestReviewDays ?? null;
 
     // One reviews finding, decided with the best data available.
     if (!reviews) {
@@ -607,7 +630,7 @@ async function runGooglePlacesCheck(targetQuery, apiKey) {
       findings.push({ key: 'review-recency', domain: 'listing', severity: 'medium', title: 'Review recency', value: `newest is ~${months} mo old`, consequence: 'A listing with no recent reviews reads as a practice that has gone quiet — or closed.', fix: 'Review system', verdictPhrase: 'your stale reviews' });
     }
 
-    if (!candidate.opening_hours) {
+    if (!hoursSet) {
       findings.push({ key: 'listing-hours', domain: 'listing', severity: 'medium', title: 'Listing hours', value: 'not set', consequence: "Patients can't tell if you're open right now.", fix: 'Profile fill', verdictPhrase: 'your missing listing hours' });
     }
     if (!candidate.photos || !candidate.photos.length) {
@@ -616,14 +639,15 @@ async function runGooglePlacesCheck(targetQuery, apiKey) {
 
     return {
       findings,
-      website: candidate.website || null,
+      website,
       found: true,
       types: candidate.types || [],
       name: candidate.name || null,
       rating,
       reviews,
-      placeId: candidate.place_id || null,
-      location: (candidate.geometry && candidate.geometry.location) || null,
+      placeId,
+      location,
+      _placesStatus: 'OK',
     };
   } catch (e) {
     findings.push({ key: 'listing-check', domain: 'listing', severity: 'medium', title: 'Google listing', value: 'not checked', consequence: "Couldn't check your Google listing right now. Try again shortly." });
@@ -638,18 +662,26 @@ function pickNearbyType(types) {
   return NEARBY_TYPES.find((t) => types.includes(t)) || null;
 }
 
-async function getRecentReviewAgeDays(placeId, apiKey) {
+// One Place Details call for the fields findplacefromtext can't return.
+async function getPlaceDetails(placeId, apiKey) {
   try {
-    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&fields=reviews&reviews_sort=newest&key=${apiKey}`;
+    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&fields=website,opening_hours,reviews&reviews_sort=newest&key=${apiKey}`;
     const res = await fetchWithTimeout(url, { timeout: 6000 });
     const data = await res.json();
-    const times = (data.result && data.result.reviews || []).map((r) => r.time).filter(Boolean);
-    if (!times.length) return null;
-    const newest = Math.max(...times); // unix seconds
-    return Math.round((Date.now() / 1000 - newest) / 86400);
+    if (data.status !== 'OK') {
+      console.error('Place Details error:', data.status, data.error_message || '');
+      return {};
+    }
+    const r = data.result || {};
+    const times = (r.reviews || []).map((x) => x.time).filter(Boolean);
+    return {
+      website: r.website || null,
+      openingHours: r.opening_hours || null,
+      newestReviewDays: times.length ? Math.round((Date.now() / 1000 - Math.max(...times)) / 86400) : null,
+    };
   } catch (e) {
-    console.error('review recency check failed:', e.message);
-    return null;
+    console.error('Place Details failed:', e.message);
+    return {};
   }
 }
 
