@@ -18,8 +18,11 @@ function initNav() {
 function initReveal() {
   const items = document.querySelectorAll('.reveal');
   if (!items.length) return;
-  if (!('IntersectionObserver' in window)) {
-    items.forEach(el => el.classList.add('in'));
+  const showAll = () => items.forEach(el => el.classList.add('in'));
+
+  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduced || !('IntersectionObserver' in window)) {
+    showAll();
     return;
   }
   const obs = new IntersectionObserver((entries) => {
@@ -31,6 +34,8 @@ function initReveal() {
     });
   }, { threshold: 0.12 });
   items.forEach(el => obs.observe(el));
+  // Safety net: nothing stays invisible for long if the observer misfires.
+  setTimeout(showAll, 2500);
 }
 
 /* ---------- FAQ accordion ---------- */
