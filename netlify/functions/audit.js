@@ -73,14 +73,16 @@ function sortFindings(findings) {
   });
 }
 
-// Only critical/high move the score. medium/low are "things to tighten" — they
-// surface in "+N more", but with the always-on improvement layer every practice
-// has several, so counting them would peg every score at the floor.
+// critical/high/medium move the score; low does not. The always-on improvement
+// layer is all `low`, so a practice's punch-list of missing pages surfaces in
+// "+N more" without dragging every score to the floor — but real, specific
+// problems (thin reviews, no hours, a slow-ish site) still pull it down.
 function computeScore(findings) {
   let score = 100;
   for (const f of findings) {
     if (f.severity === 'critical') score -= 18;
     else if (f.severity === 'high') score -= 10;
+    else if (f.severity === 'medium') score -= 5;
   }
   return Math.max(20, Math.min(100, score));
 }
