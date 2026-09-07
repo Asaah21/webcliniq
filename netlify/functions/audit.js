@@ -563,13 +563,33 @@ async function runGooglePlacesCheck(targetQuery, apiKey) {
 
     const rating = candidate.rating || 0;
     const reviews = candidate.user_ratings_total || 0;
+    const placeId = candidate.place_id || null;
+    const location = (candidate.geometry && candidate.geometry.location) || null;
+    const nearbyType = pickNearbyType(candidate.types);
 
+    // Chained after the match, run together, still parallel to PageSpeed.
+    const [reviewAgeDays, nearbyMedian] = await Promise.all([
+      placeId ? getRecentReviewAgeDays(placeId, apiKey) : Promise.resolve(null),
+      (location && nearbyType) ? getNearbyReviewMedian(location, nearbyType, placeId, apiKey) : Promise.resolve(null),
+    ]);
+
+    // One reviews finding, decided with the best data available.
     if (!reviews) {
       findings.push({ key: 'reviews', domain: 'listing', severity: 'high', title: 'Google reviews', value: 'none yet', consequence: 'Patients compare practices on reviews before anything else.', fix: 'Review system', verdictPhrase: 'your reviews' });
+    } else if (nearbyMedian && nearbyMedian >= 10 && reviews < nearbyMedian * 0.5) {
+      const far = reviews < nearbyMedian * 0.33;
+      findings.push({ key: 'reviews', domain: 'listing', severity: far ? 'high' : 'medium', bump: far ? 10 : 0, title: 'Reviews vs. your area', value: `${reviews} · ${rating}★`, benchmark: `area median ${nearbyMedian}`, consequence: `Practices near you carry around ${nearbyMedian} reviews — patients compare and pick the bigger number.`, fix: 'Review system', verdictPhrase: 'your reviews' });
     } else if (reviews < 5) {
       findings.push({ key: 'reviews', domain: 'listing', severity: 'medium', title: 'Google reviews', value: `${reviews} · ${rating}★`, consequence: 'Thin next to nearby practices — patients notice.', fix: 'Review system', verdictPhrase: 'your reviews' });
+    } else if (rating && rating < 4.3) {
+      findings.push({ key: 'reviews', domain: 'listing', severity: 'medium', title: 'Google rating', value: `${rating}★ · ${reviews} reviews`, benchmark: 'patients trust 4.3★+', consequence: 'Below the rating most patients will book from without a second look.', fix: 'Reputation repair + review flow', verdictPhrase: 'your rating' });
     } else {
       findings.push({ key: 'reviews', domain: 'listing', severity: 'clear', title: 'Google reviews', value: `${reviews} · ${rating}★` });
+    }
+
+    if (reviews && reviewAgeDays != null && reviewAgeDays > 183) {
+      const months = Math.round(reviewAgeDays / 30);
+      findings.push({ key: 'review-recency', domain: 'listing', severity: 'medium', title: 'Review recency', value: `newest is ~${months} mo old`, consequence: 'A listing with no recent reviews reads as a practice that has gone quiet — or closed.', fix: 'Review system', verdictPhrase: 'your stale reviews' });
     }
 
     if (!candidate.opening_hours) {
@@ -593,5 +613,46 @@ async function runGooglePlacesCheck(targetQuery, apiKey) {
   } catch (e) {
     findings.push({ key: 'listing-check', domain: 'listing', severity: 'medium', title: 'Google listing', value: 'not checked', consequence: "Couldn't check your Google listing right now. Try again shortly." });
     return { findings, website: null, found: false, types: [] };
+  }
+}
+
+// Places `type` values valid for a rankby=distance nearby search, healthcare only.
+const NEARBY_TYPES = ['dentist', 'physiotherapist', 'doctor', 'hospital', 'pharmacy', 'veterinary_care', 'spa'];
+function pickNearbyType(types) {
+  if (!Array.isArray(types)) return null;
+  return NEARBY_TYPES.find((t) => types.includes(t)) || null;
+}
+
+async function getRecentReviewAgeDays(placeId, apiKey) {
+  try {
+    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&fields=reviews&reviews_sort=newest&key=${apiKey}`;
+    const res = await fetchWithTimeout(url, { timeout: 6000 });
+    const data = await res.json();
+    const times = (data.result && data.result.reviews || []).map((r) => r.time).filter(Boolean);
+    if (!times.length) return null;
+    const newest = Math.max(...times); // unix seconds
+    return Math.round((Date.now() / 1000 - newest) / 86400);
+  } catch (e) {
+    console.error('review recency check failed:', e.message);
+    return null;
+  }
+}
+
+async function getNearbyReviewMedian(location, type, ownPlaceId, apiKey) {
+  try {
+    const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${location.lat},${location.lng}&rankby=distance&type=${encodeURIComponent(type)}&key=${apiKey}`;
+    const res = await fetchWithTimeout(url, { timeout: 6000 });
+    const data = await res.json();
+    const counts = (data.results || [])
+      .filter((r) => r.place_id !== ownPlaceId && typeof r.user_ratings_total === 'number')
+      .slice(0, 15)
+      .map((r) => r.user_ratings_total)
+      .sort((a, b) => a - b);
+    if (counts.length < 4) return null; // not enough neighbours to be a real benchmark
+    const mid = Math.floor(counts.length / 2);
+    return counts.length % 2 ? counts[mid] : Math.round((counts[mid - 1] + counts[mid]) / 2);
+  } catch (e) {
+    console.error('nearby median check failed:', e.message);
+    return null;
   }
 }
