@@ -203,8 +203,9 @@ function initAuditBar() {
           email,
           search_query: value,
           health_score: data.score,
-          letter_grade: null,
           findings: data.findings,
+          audit_id: data.auditId || null,
+          public_id: data.publicId || null,
         }),
       });
       const result = await res.json();
