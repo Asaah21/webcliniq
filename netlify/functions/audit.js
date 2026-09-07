@@ -168,7 +168,9 @@ exports.handler = async (event) => {
     let placeTypes = [];
     let placesMatched = false;
     let matched = null;
+    let placesStatus = null;
     if (listingResult) {
+      placesStatus = listingResult._placesStatus || (listingResult.found ? 'OK' : null);
       raw.push(...listingResult.findings);
       placesMatched = listingResult.found;
       placeTypes = listingResult.types || [];
@@ -235,6 +237,7 @@ exports.handler = async (event) => {
         hadListing: placesMatched,
         mismatch,
         alreadyChecked: false,
+        _placesStatus: placesStatus, // temporary diagnostic — removed after Step 1
         // Back-compat aliases for the current frontend (removed once Step 2 lands)
         healthScore: score,
         letterGrade: null,
@@ -565,11 +568,12 @@ async function runGooglePlacesCheck(targetQuery, apiKey) {
     const searchUrl = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(cleanQuery)}&inputtype=textquery&fields=${fields}&key=${apiKey}`;
     const res = await fetchWithTimeout(searchUrl);
     const data = await res.json();
+    console.error('Places findplacefromtext status:', data.status, data.error_message || '', 'candidates:', (data.candidates || []).length);
     const candidate = data.candidates && data.candidates[0];
 
     if (!candidate) {
       findings.push({ key: 'no-listing', domain: 'listing', severity: 'critical', title: 'Google Business Profile', value: 'not found', consequence: 'No Google listing found under this name — patients searching Maps for a nearby practice never see you.', fix: 'Listing setup + verification', verdictPhrase: 'your missing Google listing' });
-      return { findings, website: null, found: false, types: [] };
+      return { findings, website: null, found: false, types: [], _placesStatus: data.status || 'NO_STATUS' };
     }
 
     const rating = candidate.rating || 0;
