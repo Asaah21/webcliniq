@@ -150,10 +150,11 @@ exports.handler = async (event) => {
 
     const placesTarget = businessName || url;
 
-    // PageSpeed's lab run runs alone on the clock (up to 18s); the Places branch
-    // runs alongside it.
-    const [siteResult, listingResult] = await Promise.all([
+    // PageSpeed's lab run runs alone on the clock (up to 18s). The homepage
+    // content scan and the Places branch run alongside it.
+    const [siteResult, contentResult, listingResult] = await Promise.all([
       url ? runPageSpeedCheck(url, GOOGLE_API_KEY) : Promise.resolve(null),
+      url ? runWebsiteContentCheck(url) : Promise.resolve(null),
       placesTarget ? runGooglePlacesCheck(placesTarget, GOOGLE_API_KEY) : Promise.resolve(null),
     ]);
 
@@ -162,6 +163,7 @@ exports.handler = async (event) => {
       raw.push(...siteResult.findings);
       screenshot = siteResult.screenshot || null;
     }
+    if (contentResult) raw.push(...contentResult.findings);
 
     let placeTypes = [];
     let placesMatched = false;
@@ -417,6 +419,127 @@ async function runPageSpeedCheck(targetUrl, apiKey) {
       : { key: 'site-reach', domain: 'website', severity: 'medium', title: 'Website check', value: 'unreachable', consequence: `We couldn't reach ${targetUrl} to run a check.` });
     findings.push(httpsFinding);
     return { findings, screenshot: null };
+  }
+}
+
+/* ---------- Website: one homepage fetch, parsed ---------- */
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+const BOOKING_WIDGETS = /(calendly\.com|acuityscheduling|acuity\.com|nexhealth|zocdoc|squarespace-scheduling|setmore|simplybook|localmed|yapi|solutionreach|doctible|weave|dentrixascend|adit\.com)/i;
+
+async function runWebsiteContentCheck(targetUrl) {
+  const findings = [];
+  let html = '';
+  let finalUrl = targetUrl;
+  try {
+    const res = await fetchWithTimeout(targetUrl, { timeout: 8000, redirect: 'follow', headers: { 'User-Agent': BROWSER_UA, 'Accept': 'text/html' } });
+    finalUrl = res.url || targetUrl;
+    if (!res.ok) throw new Error(`homepage HTTP ${res.status}`);
+    html = (await res.text()).slice(0, 400000); // cap — homepages that big are already a problem
+  } catch (e) {
+    // PageSpeed already reports an unreachable site; don't double up. Just skip.
+    console.error('homepage fetch failed for', targetUrl, e.message);
+    return { findings, html: '', finalUrl };
+  }
+
+  checkContactFriction(html, findings);
+  checkImprovementLayer(html, findings, finalUrl);
+  await checkBrokenLinks(html, finalUrl, findings);
+
+  return { findings, html, finalUrl };
+}
+
+function checkContactFriction(html, findings) {
+  const hasTel = /href\s*=\s*["']tel:/i.test(html);
+  if (!hasTel) {
+    findings.push({ key: 'tap-to-call', domain: 'website', severity: 'medium', title: 'Tap-to-call', value: 'missing', consequence: "Your phone number isn't a tappable link — mobile patients have to copy it out by hand.", fix: 'Click-to-call', verdictPhrase: 'a tap-to-call number' });
+  }
+
+  const bookingRe = /book(?:ing)?\s*(?:online|now|a?\s*appointment|an?\s*appointment)?|request\s*(?:an?\s*)?appointment|schedule\s*(?:a\s*)?(?:visit|appointment)|make\s*an?\s*appointment/i;
+  const hasBooking = bookingRe.test(html) || BOOKING_WIDGETS.test(html);
+  if (!hasBooking) {
+    findings.push({ key: 'booking-action', domain: 'website', severity: 'medium', title: 'Booking action', value: 'not found', consequence: "No clear 'Book' or 'Request appointment' action — visitors hunt for how to get in.", fix: 'Booking CTA', verdictPhrase: 'a clear booking button' });
+  }
+
+  const hasForm = /<form\b/i.test(html) || BOOKING_WIDGETS.test(html);
+  if (!hasForm) {
+    findings.push({ key: 'contact-form', domain: 'website', severity: 'low', title: 'Contact form', value: 'none', consequence: 'Phone-only contact — you lose people who would rather type than call, and after-hours enquiries.', fix: 'Form / booking embed' });
+  }
+
+  const hasAddress = /google\.com\/maps|maps\.google\.|<address\b|"@type"\s*:\s*"PostalAddress"|itemprop\s*=\s*["']address["']|<iframe[^>]+(?:google[^>]+maps|maps\.google)/i.test(html);
+  if (!hasAddress) {
+    findings.push({ key: 'address-map', domain: 'website', severity: 'low', title: 'Address on site', value: 'not found', consequence: 'No address or embedded map on the homepage — hurts local trust and how you rank nearby.', fix: 'Add address + map' });
+  }
+}
+
+// Always-on improvement layer — legitimate, healthcare-relevant, sellable, and
+// always something. All 'low' severity: they surface in "+N more", never move
+// the score.
+function checkImprovementLayer(html, findings, finalUrl) {
+  const metaTag = (html.match(/<meta\b[^>]*\bname\s*=\s*["']?description["']?[^>]*>/i) || [])[0] || '';
+  const metaDesc = (metaTag.match(/\bcontent\s*=\s*["']([^"']*)["']/i) || [])[1]
+    || (metaTag.match(/\bcontent\s*=\s*([^\s">]+)/i) || [])[1] || '';
+  if (metaDesc.trim().length < 50) {
+    findings.push({ key: 'meta-description', domain: 'website', severity: 'low', title: 'Search description', value: metaDesc ? 'too short' : 'missing', consequence: "Google shows a summary of your page in results — yours is missing or too thin to be useful.", fix: 'On-page SEO' });
+  }
+
+  const imgs = html.match(/<img\b[^>]*>/gi) || [];
+  const withAlt = imgs.filter((t) => /\balt\s*=/i.test(t)).length;
+  if (imgs.length >= 4 && withAlt / imgs.length < 0.6) {
+    findings.push({ key: 'image-alt', domain: 'website', severity: 'low', title: 'Image alt text', value: `${imgs.length - withAlt} of ${imgs.length} missing`, consequence: 'Images without alt text are invisible to screen readers and to Google image search.', fix: 'Accessibility pass' });
+  }
+
+  const haystack = html.toLowerCase();
+  const hasPage = (re) => re.test(haystack);
+  if (!hasPage(/new[\s-]?patient/)) {
+    findings.push({ key: 'new-patients-page', domain: 'website', severity: 'low', title: 'New-patients page', value: 'not found', consequence: "Nothing aimed at a first-time patient — what to bring, what to expect, how to register.", fix: 'New-patients page' });
+  }
+  if (!hasPage(/our[\s-]?team|meet[\s-]the|our[\s-]?(?:doctors|dentists|physios|providers|staff)|\bbios?\b/)) {
+    findings.push({ key: 'team-page', domain: 'website', severity: 'low', title: 'Team / bios page', value: 'not found', consequence: 'No practitioner bios — patients pick a provider partly on who they will actually see.', fix: 'Team page' });
+  }
+  if (!hasPage(/\bfaq\b|frequently\s+asked/)) {
+    findings.push({ key: 'faq-page', domain: 'website', severity: 'low', title: 'FAQ', value: 'not found', consequence: 'Common questions (insurance, first visit, hours) answered on the page cut down phone back-and-forth.', fix: 'FAQ page' });
+  }
+  if (!hasPage(/insurance|\bfees\b|payment\s+options|financing|self[\s-]?pay/)) {
+    findings.push({ key: 'fees-info', domain: 'website', severity: 'low', title: 'Fees / insurance info', value: 'not found', consequence: "Patients want cost and insurance answered before they call — silence sends them elsewhere.", fix: 'Fees / insurance page' });
+  }
+}
+
+// Only flags links that are genuinely dead (404 / 410 / DNS failure). Bot blocks
+// (403 / 429) and servers that reject HEAD (405) are not counted.
+async function checkBrokenLinks(html, baseUrl, findings) {
+  let origin;
+  try { origin = new URL(baseUrl).origin; } catch { return; }
+
+  const hrefs = new Set();
+  const re = /href\s*=\s*["']([^"']+)["']/gi;
+  let m;
+  while ((m = re.exec(html)) && hrefs.size < 40) {
+    const h = m[1].trim();
+    if (!h || h.startsWith('#') || /^(mailto:|tel:|javascript:|data:)/i.test(h)) continue;
+    let abs;
+    try { abs = new URL(h, baseUrl).href; } catch { continue; }
+    if (!/^https?:/i.test(abs)) continue;
+    hrefs.add(abs.split('#')[0]);
+  }
+  // Prefer same-origin links, then a few external, capped at 20.
+  const links = [...hrefs].sort((a, b) => (a.startsWith(origin) ? 0 : 1) - (b.startsWith(origin) ? 0 : 1)).slice(0, 20);
+  if (!links.length) return;
+
+  const results = await Promise.allSettled(links.map(async (link) => {
+    try {
+      const r = await fetchWithTimeout(link, { method: 'HEAD', timeout: 4000, redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
+      return { link, status: r.status };
+    } catch (e) {
+      return { link, status: e.name === 'AbortError' ? 0 : -1 };
+    }
+  }));
+
+  const dead = results
+    .map((r) => (r.status === 'fulfilled' ? r.value : null))
+    .filter((v) => v && (v.status === 404 || v.status === 410 || v.status === -1));
+
+  if (dead.length) {
+    findings.push({ key: 'broken-links', domain: 'website', severity: 'medium', title: 'Broken links', value: `${dead.length} dead`, consequence: 'Links on your homepage lead nowhere — patients hit dead ends and Google notices.', fix: 'Link cleanup', verdictPhrase: 'the broken links' });
   }
 }
 
