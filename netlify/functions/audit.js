@@ -170,9 +170,7 @@ exports.handler = async (event) => {
     let placeTypes = [];
     let placesMatched = false;
     let matched = null;
-    let placesStatus = null;
     if (listingResult) {
-      placesStatus = listingResult._placesStatus || (listingResult.found ? 'OK' : null);
       raw.push(...listingResult.findings);
       placesMatched = listingResult.found;
       placeTypes = listingResult.types || [];
@@ -239,7 +237,6 @@ exports.handler = async (event) => {
         hadListing: placesMatched,
         mismatch,
         alreadyChecked: false,
-        _placesStatus: placesStatus, // temporary diagnostic — removed after Step 1
         // Back-compat aliases for the current frontend (removed once Step 2 lands)
         healthScore: score,
         letterGrade: null,
@@ -588,13 +585,13 @@ async function runGooglePlacesCheck(targetQuery, apiKey) {
     if (data.status && data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
       console.error('Places findplacefromtext error:', data.status, data.error_message || '');
       findings.push({ key: 'listing-check', domain: 'listing', severity: 'medium', title: 'Google listing', value: 'not checked', consequence: "Couldn't check your Google listing right now. Try again shortly." });
-      return { findings, website: null, found: false, types: [], _placesStatus: data.status };
+      return { findings, website: null, found: false, types: [] };
     }
 
     const candidate = data.candidates && data.candidates[0];
     if (!candidate || !nameLooksLikeMatch(cleanQuery, candidate.name)) {
       findings.push({ key: 'no-listing', domain: 'listing', severity: 'critical', title: 'Google Business Profile', value: 'not found', consequence: 'No Google listing found under this name — patients searching Maps for a nearby practice never see you.', fix: 'Listing setup + verification', verdictPhrase: 'your missing Google listing' });
-      return { findings, website: null, found: false, types: [], _placesStatus: data.status || 'ZERO_RESULTS' };
+      return { findings, website: null, found: false, types: [] };
     }
 
     const rating = candidate.rating || 0;
@@ -649,7 +646,6 @@ async function runGooglePlacesCheck(targetQuery, apiKey) {
       reviews,
       placeId,
       location,
-      _placesStatus: 'OK',
     };
   } catch (e) {
     findings.push({ key: 'listing-check', domain: 'listing', severity: 'medium', title: 'Google listing', value: 'not checked', consequence: "Couldn't check your Google listing right now. Try again shortly." });
