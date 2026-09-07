@@ -1,0 +1,2 @@
+# /r/<public_id> -> the report function, URL stays put (200 = rewrite, not redirect)
+/r/*  /.netlify/functions/report  200
