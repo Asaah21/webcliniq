@@ -35,6 +35,10 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || process.env.PAGESPEED_API_KEY;
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'WebCliniQ <onboarding@resend.dev>';
+const SITE_URL = (process.env.SITE_URL || 'https://webcliniq.com').replace(/\/$/, '');
+const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL || 'support@webcliniq.com';
+
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const supabase = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -200,11 +204,12 @@ exports.handler = async (event) => {
     if (!shown.length) shown = findings.filter((f) => f.severity !== 'clear').slice(0, 3);
     const moreCount = Math.max(0, findings.filter((f) => f.severity !== 'clear').length - shown.length);
 
-    const publicId = randomUUID().slice(0, 8); // stub — the /r/<id> page + DB column land in Step 3
+    const publicId = randomUUID().slice(0, 8); // the /r/<id> report page key
+    let auditId = null;
 
     if (supabase) {
       try {
-        const { error } = await supabase.from('audits').insert({
+        const { data: row, error } = await supabase.from('audits').insert({
           ip_address: clientIp,
           search_query: value,
           health_score: score,
@@ -212,8 +217,11 @@ exports.handler = async (event) => {
           all_findings: findings,
           had_website: !!url,
           had_business_name: !!businessName || placesMatched,
-        });
+          public_id: publicId,
+          screenshot: screenshot || null,
+        }).select('id').single();
         if (error) console.error('audits insert failed:', error.message);
+        else auditId = row && row.id;
       } catch (insertErr) {
         console.error('audits insert threw:', insertErr.message);
       }
@@ -225,6 +233,7 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         // Step 1 contract
         publicId,
+        auditId,
         score,
         verdict,
         findings,
@@ -255,7 +264,7 @@ exports.handler = async (event) => {
 
 /* ---------- Email capture ---------- */
 async function handleEmailCapture(payload) {
-  const { email, search_query, health_score, letter_grade, findings } = payload;
+  const { email, search_query, health_score, findings, audit_id, public_id } = payload;
 
   if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { statusCode: 400, body: JSON.stringify({ success: false, error: "That doesn't look like a valid email address." }) };
@@ -265,7 +274,8 @@ async function handleEmailCapture(payload) {
     return { statusCode: 200, body: JSON.stringify({ success: false, error: 'not_configured', message: "Email delivery isn't set up yet — message us on WhatsApp instead and we'll send it directly." }) };
   }
 
-  const html = buildResultsEmailHtml({ search_query, health_score, letter_grade, findings: findings || [] });
+  const reportUrl = public_id ? `${SITE_URL}/r/${encodeURIComponent(public_id)}` : null;
+  const html = buildResultsEmailHtml({ search_query, health_score, findings: findings || [], reportUrl });
 
   try {
     const res = await fetchWithTimeout('https://api.resend.com/emails', {
@@ -274,7 +284,8 @@ async function handleEmailCapture(payload) {
       body: JSON.stringify({
         from: FROM_EMAIL,
         to: email,
-        subject: `Your WebCliniQ results for ${search_query || 'your business'}`,
+        reply_to: 'support@webcliniq.com',
+        subject: `Your WebCliniQ results for ${search_query || 'your practice'}`,
         html,
       }),
     });
@@ -296,6 +307,10 @@ async function handleEmailCapture(payload) {
         search_query: search_query || null,
         health_score: health_score ?? null,
         findings: findings || [],
+        audit_id: audit_id || null,
+        consent_at: new Date().toISOString(),
+        source: 'audit_email',
+        status: 'new',
       });
       if (error) console.error('audit_leads insert failed:', error.message);
     } catch (insertErr) {
@@ -303,29 +318,57 @@ async function handleEmailCapture(payload) {
     }
   }
 
+  // Ping the owner — best effort, never blocks the visitor's success.
+  notifyNewLead({ email, search_query, health_score, reportUrl }).catch((e) => console.error('lead notify failed:', e.message));
+
   return { statusCode: 200, body: JSON.stringify({ success: true }) };
 }
 
-function buildResultsEmailHtml({ search_query, health_score, letter_grade, findings }) {
-  const rows = findings.map((f) =>
-    `<tr><td style="padding:10px 0;border-bottom:1px solid #DCE2EA;font-size:14px;color:${f.flag === 'warn' ? '#A8431F' : '#147A65'};font-family:monospace;white-space:nowrap;vertical-align:top;">${f.flag === 'warn' ? 'FLAG' : 'CLEAR'}</td><td style="padding:10px 0 10px 12px;border-bottom:1px solid #DCE2EA;font-size:14px;color:#45566E;">${f.text}</td></tr>`
+async function notifyNewLead({ email, search_query, health_score, reportUrl }) {
+  if (!RESEND_API_KEY) return;
+  await fetchWithTimeout('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: FROM_EMAIL,
+      to: NOTIFY_EMAIL,
+      reply_to: email,
+      subject: `New audit lead — ${search_query || email}`,
+      html: `<div style="font-family:Arial,sans-serif;font-size:14px;color:#12233D;">
+               <p><strong>${esc(email)}</strong> asked for the full report.</p>
+               <p>Searched: ${esc(search_query || '—')}<br>Score: ${health_score != null ? health_score + '/100' : '—'}</p>
+               ${reportUrl ? `<p><a href="${esc(reportUrl)}">Open their report</a></p>` : ''}
+               <p style="color:#6B7890;">Work it from the <code>audit_leads</code> table.</p>
+             </div>`,
+    }),
+  });
+}
+
+function buildResultsEmailHtml({ search_query, health_score, findings, reportUrl }) {
+  const flagged = (findings || []).filter((f) => f.severity && f.severity !== 'clear').slice(0, 3);
+  const bullets = flagged.map((f) =>
+    `<li style="margin:8px 0;color:#12233D;font-size:14px;">${esc(f.title)}${f.value ? ` &mdash; <span style="font-family:monospace;">${esc(f.value)}</span>` : ''}${f.consequence ? `<br><span style="color:#6B7890;">${esc(f.consequence)}</span>` : ''}</li>`
   ).join('');
 
-  return `
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+  <body style="margin:0;background:#F5F7FA;padding:24px 0;">
   <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;">
     <div style="background:#12233D;padding:24px 28px;border-radius:10px 10px 0 0;">
       <span style="color:#fff;font-size:20px;font-weight:bold;">WebClini<span style="color:#6EC1FF;">Q</span></span>
     </div>
-    <div style="padding:28px;border:1px solid #DCE2EA;border-top:none;border-radius:0 0 10px 10px;">
-      <p style="color:#12233D;font-size:16px;margin:0 0 4px;">Your results for <strong>${search_query || 'your business'}</strong></p>
-      ${health_score != null ? `<p style="color:#6B7890;font-size:13px;margin:0 0 20px;">Score: ${health_score}/100${letter_grade ? ` &middot; Grade ${letter_grade}` : ''}</p>` : ''}
-      <table style="width:100%;border-collapse:collapse;">${rows}</table>
-      <p style="margin-top:24px;">
-        <a href="https://wa.me/233538665715" style="display:inline-block;background:#12233D;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-size:14px;">Message Us on WhatsApp</a>
-      </p>
-      <p style="color:#6B7890;font-size:12px;margin-top:24px;">You're receiving this because you asked WebCliniQ to email your audit results. support@webcliniq.com</p>
+    <div style="padding:28px;border:1px solid #DCE2EA;border-top:none;border-radius:0 0 10px 10px;background:#fff;">
+      <p style="color:#12233D;font-size:16px;margin:0 0 4px;">Your results for <strong>${esc(search_query || 'your practice')}</strong></p>
+      ${health_score != null ? `<p style="color:#6B7890;font-size:13px;margin:0 0 18px;">Score: ${health_score}/100</p>` : ''}
+      ${bullets ? `<p style="color:#12233D;font-size:14px;margin:0 0 4px;">The main things flagged:</p><ul style="padding-left:18px;margin:6px 0 20px;">${bullets}</ul>` : ''}
+      ${reportUrl
+        ? `<p style="margin:0 0 8px;"><a href="${esc(reportUrl)}" style="display:inline-block;background:#D65B34;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-size:14px;font-weight:bold;">Open my full report</a></p>
+           <p style="color:#6B7890;font-size:13px;margin:0 0 20px;">Every issue, what fixes it, and where you stand — on one page you can forward.</p>`
+        : ''}
+      <p style="color:#6B7890;font-size:13px;margin:0;">Or <a href="https://wa.me/233538665715" style="color:#12233D;">message us on WhatsApp</a> to talk it through.</p>
+      <p style="color:#8595AD;font-size:12px;margin-top:24px;border-top:1px solid #ECEAE3;padding-top:14px;">You asked WebCliniQ to email your audit results. Reply to this email to unsubscribe. support@webcliniq.com &middot; Emmanuel Asaah Alemya, WebCliniQ</p>
     </div>
-  </div>`;
+  </div>
+  </body></html>`;
 }
 
 /* ---------- Helpers ---------- */
