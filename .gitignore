@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+node_modules/
+.netlify/
+.DS_Store
+_report_preview.html
+_email_preview.html
