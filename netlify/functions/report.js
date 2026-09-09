@@ -54,7 +54,8 @@ exports.handler = async (event) => {
 
 function reportBody(row) {
   const findings = Array.isArray(row.all_findings) ? row.all_findings : [];
-  const attention = findings.filter((f) => f.severity && f.severity !== 'clear');
+  const attention = findings.filter((f) => f.severity === 'critical' || f.severity === 'high' || f.severity === 'medium');
+  const tighten = findings.filter((f) => f.severity === 'low');
   const clear = findings.filter((f) => f.severity === 'clear');
   const name = row.search_query || 'your practice';
   const score = row.health_score;
@@ -71,7 +72,16 @@ function reportBody(row) {
       ${f.fix ? `<p class="fix"><span>The fix</span> ${esc(f.fix)}</p>` : ''}
     </div>`).join('');
 
+  const tightenRows = tighten.map((f) => `<li>${esc(f.title)}${f.value ? ` &mdash; ${esc(f.value)}` : ''}${f.fix ? ` <span class="tighten-fix">(${esc(f.fix)})</span>` : ''}</li>`).join('');
   const clearRows = clear.map((f) => `<li>${esc(f.title)}${f.value ? ` &mdash; ${esc(f.value)}` : ''}</li>`).join('');
+
+  const bits = [];
+  if (attention.length) bits.push(`${attention.length} to fix`);
+  if (tighten.length) bits.push(`${tighten.length} smaller ${tighten.length === 1 ? 'thing' : 'things'} to tighten`);
+  if (clear.length) bits.push(`${clear.length} looking good`);
+  const summaryLine = bits.length
+    ? `${bits.join(', ')}. Everything's listed below, worst-first, each with what fixes it.`
+    : `Nothing flagged.`;
 
   const waText = attention.length
     ? `Hi WebCliniQ. I've read my full report for "${name}". I'd like to sort out ${attention[0].title.toLowerCase()}.`
@@ -88,17 +98,14 @@ function reportBody(row) {
 
   <div class="summary">
     ${score != null ? `<div class="score"><b>${esc(String(score))}</b><span>/ 100</span></div>` : ''}
-    <p>${attention.length
-      ? `${attention.length} ${attention.length === 1 ? 'thing needs' : 'things need'} attention, ${clear.length} looking good. They're listed worst-first below, each with what fixes it.`
-      : `Nothing urgent — a few smaller things to tighten, listed below.`}</p>
+    <p>${summaryLine}</p>
   </div>
 
   ${row.screenshot ? `<figure class="shot"><img src="${esc(row.screenshot)}" alt="Your site on a phone"><figcaption>Your site on a phone</figcaption></figure>` : ''}
 
-  <section>
-    <h2>Needs attention</h2>
-    ${attentionRows || '<p class="none">Nothing flagged.</p>'}
-  </section>
+  ${attentionRows ? `<section><h2>Fix first</h2>${attentionRows}</section>` : ''}
+
+  ${tightenRows ? `<section><h2>Smaller things to tighten</h2><ul class="clear-list">${tightenRows}</ul></section>` : ''}
 
   ${clearRows ? `<section><h2>Looking good</h2><ul class="clear-list">${clearRows}</ul></section>` : ''}
 
@@ -152,6 +159,7 @@ function shell(title, body) {
   .fix span{ font-family:'JetBrains Mono',monospace; font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; color:var(--green); margin-right:6px; }
   .clear-list{ margin:0; padding-left:20px; color:var(--soft); font-size:.92rem; }
   .clear-list li{ margin:4px 0; }
+  .tighten-fix{ color:var(--muted); font-size:.85em; }
   .none{ color:var(--muted); font-size:.92rem; }
   .cta{ margin:36px 0 0; background:var(--ink); color:#fff; border-radius:12px; padding:24px; text-align:center; }
   .cta .btn{ display:inline-block; background:var(--warm); color:#fff; font-weight:600; text-decoration:none; padding:12px 24px; border-radius:6px; }
