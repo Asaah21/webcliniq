@@ -16,6 +16,8 @@ create table if not exists public.audits (
 
 alter table public.audits add column if not exists public_id  text;
 alter table public.audits add column if not exists screenshot text;   -- PSI phone screenshot, data: URI
+alter table public.audits add column if not exists ai_summary text;   -- Gemini-generated summary paragraph
+alter table public.audits add column if not exists city       text;   -- reverse-geocoded from the listing's lat/lng
 create unique index if not exists audits_public_id_key on public.audits (public_id);
 create index if not exists audits_ip_created_idx on public.audits (ip_address, created_at desc);
 

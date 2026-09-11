@@ -82,21 +82,134 @@ function sortFindings(findings) {
 // "+N more" without dragging every score to the floor — but real, specific
 // problems (thin reviews, no hours, a slow-ish site) still pull it down.
 function computeScore(findings) {
-  let score = 100;
+  let score = 85;
   for (const f of findings) {
-    if (f.severity === 'critical') score -= 18;
-    else if (f.severity === 'high') score -= 10;
-    else if (f.severity === 'medium') score -= 5;
+    if (f.severity === 'critical') score -= 15;
+    else if (f.severity === 'high') score -= 8;
+    else if (f.severity === 'medium') score -= 4;
   }
-  return Math.max(20, Math.min(100, score));
+  return Math.max(20, Math.min(85, score));
 }
 
 function buildVerdict(sorted) {
   const flagged = sorted.filter((f) => f.severity !== 'clear');
-  if (!flagged.length) return 'A solid baseline — just a few smaller things to tighten.';
+  if (!flagged.length) return "Nothing on fire — but a deeper look turned up a few things worth tightening.";
+  if (flagged[0].verdictOverride) return flagged[0].verdictOverride;
   const phrase = (f) => f.verdictPhrase || f.title.toLowerCase();
   if (flagged.length === 1) return `Start with ${phrase(flagged[0])}.`;
   return `Start with ${phrase(flagged[0])}, then ${phrase(flagged[1])}.`;
+}
+
+// A short, honest line that turns the bare number into context. Uses the real
+// spread of past scores once there's enough of it; otherwise says what it means.
+async function getScoreContext(score, hadWebsite) {
+  const fallback = hadWebsite
+    ? 'Scored on your Google listing and your website.'
+    : 'Scored on your Google listing alone — a website would be checked too.';
+  if (!supabase) return fallback;
+  try {
+    const { data } = await supabase.from('audits').select('health_score').not('health_score', 'is', null).limit(500);
+    const scores = (data || []).map((r) => r.health_score).filter((n) => typeof n === 'number').sort((a, b) => a - b);
+    if (scores.length < 15) return fallback;
+    const median = scores[Math.floor(scores.length / 2)];
+    if (score >= median) return `Better than most — half the practices we check score below ${median}.`;
+    return `Half the practices we check score above ${median}.`;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+async function callGemini(prompt) {
+  if (!GEMINI_API_KEY) return null;
+  try {
+    // A rolling alias, not a dated snapshot — dated models (e.g. gemini-2.0-flash)
+    // get retired by Google and start 404ing with no warning.
+    const res = await fetchWithTimeout(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.4, maxOutputTokens: 600 },
+        }),
+        timeout: 8000,
+      }
+    );
+    if (!res.ok) {
+      console.error('Gemini call failed:', res.status, (await res.text()).slice(0, 300));
+      return null;
+    }
+    const data = await res.json();
+    const text = data && data.candidates && data.candidates[0] && data.candidates[0].content
+      && data.candidates[0].content.parts && data.candidates[0].content.parts[0]
+      && data.candidates[0].content.parts[0].text;
+    return text ? text.trim() : null;
+  } catch (e) {
+    console.error('Gemini call failed:', e.message);
+    return null;
+  }
+}
+
+// Sharpens a handful of data-rich findings with the actual numbers, and
+// writes one plain-language summary paragraph. Best-effort: any failure
+// (missing key, bad JSON, network) degrades to no sharpening / no summary
+// rather than breaking the audit.
+const SHARPENABLE_KEYS = ['reviews', 'reviews-vs-area', 'phone-speed', 'nap-consistency', 'review-recency'];
+
+async function enrichWithAI(findings, matched, practiceType, city, hadWebsite, nearbyTop3) {
+  const name = (matched && matched.name) || 'this practice';
+  const typeLabel = TYPE_LABELS[practiceType] || 'healthcare practice';
+  const locationLabel = city || 'your area';
+
+  const enrichable = findings.filter((f) => SHARPENABLE_KEYS.includes(f.key) && f.severity !== 'clear');
+  // The key in brackets is what must come back verbatim in "sharpened" — the
+  // model has no other reliable way to know our internal finding keys.
+  const findingLines = enrichable.map((f) =>
+    `- [${f.key}] ${f.title}: ${f.value || ''}${f.benchmark ? ` (benchmark: ${f.benchmark})` : ''}${nearbyTop3 ? ` (nearby competitors: ${nearbyTop3.join(', ')} reviews)` : ''}`
+  ).join('\n');
+
+  const allFlagged = findings
+    .filter((f) => f.severity !== 'clear' && f.severity !== 'low')
+    .slice(0, 6)
+    .map((f) => `${f.title}: ${f.value || 'flagged'}`)
+    .join(', ');
+
+  const prompt = `You write copy for a healthcare web presence audit tool. Be direct and specific. No jargon. Write as if speaking to the practice owner, not a developer.
+
+Practice: ${name}
+Type: ${typeLabel}
+City: ${locationLabel}
+Has website: ${hadWebsite ? 'yes' : 'no'}
+Key issues found: ${allFlagged}
+
+TASK 1 — SHARPEN these finding consequences using the actual data. One sentence each. Use the numbers. Name the practice type and city where it adds weight. In your JSON, use the bracketed key exactly as given (e.g. "[phone-speed]" becomes the key "phone-speed") — not the title.
+${findingLines}
+
+TASK 2 — Write one summary paragraph (3-4 sentences). Use the practice name. Connect the most important findings into a plain picture of where they stand. Be honest, not alarming. End with what fixing the top issue would change for them specifically.
+
+Respond ONLY with valid JSON:
+{
+  "sharpened": { "finding-key": "sharpened consequence", ... },
+  "summary": "paragraph"
+}`;
+
+  const raw = await callGemini(prompt);
+  if (!raw) return { summary: null, sharpened: {} };
+
+  try {
+    const clean = raw.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+    return JSON.parse(clean);
+  } catch (e) {
+    console.error('Gemini parse failed:', e.message);
+    return { summary: null, sharpened: {} };
+  }
+}
+
+function stripHost(u) {
+  try { return new URL(u).host.replace(/^www\./, ''); } catch { return (u || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]; }
 }
 
 // Back-compat: the current script.js reads .flag / .category / .text.
@@ -156,13 +269,35 @@ exports.handler = async (event) => {
 
     const placesTarget = businessName || url;
 
-    // PageSpeed's lab run runs alone on the clock (up to 18s). The homepage
-    // content scan and the Places branch run alongside it.
-    const [siteResult, contentResult, listingResult] = await Promise.all([
-      url ? runPageSpeedCheck(url, GOOGLE_API_KEY) : Promise.resolve(null),
-      url ? runWebsiteContentCheck(url) : Promise.resolve(null),
-      placesTarget ? runGooglePlacesCheck(placesTarget, GOOGLE_API_KEY) : Promise.resolve(null),
-    ]);
+    // If a URL was given, everything runs in parallel (PageSpeed owns the clock).
+    // If only a name was given, we must resolve the listing FIRST, then check
+    // whatever website it links to — a name-only check must still audit the site.
+    const enteredSiteP = url ? runPageSpeedCheck(url, GOOGLE_API_KEY, 18000) : null;
+    const enteredContentP = url ? runWebsiteContentCheck(url) : null;
+    // NAP checking needs homepage HTML; when a URL was given it's already in
+    // flight above, so Places can just await it. Name-only audits haven't
+    // fetched a site yet at this point (there's nothing to fetch until the
+    // listing resolves one) — the NAP check quietly skips itself in that case.
+    const listingResult = placesTarget ? await runGooglePlacesCheck(placesTarget, GOOGLE_API_KEY, url ? enteredContentP : null) : null;
+
+    // The site we actually audit: what they typed, else the one on their listing.
+    const listingSite = listingResult && listingResult.found ? listingResult.website : null;
+    const effectiveUrl = url || listingSite || null;
+    const siteFromListing = !url && !!listingSite;
+
+    let siteResult = null;
+    let contentResult = null;
+    if (url) {
+      siteResult = await enteredSiteP;
+      contentResult = await enteredContentP;
+    } else if (effectiveUrl) {
+      // name-only path: site checks run after Places; tighter PSI budget to stay
+      // clear of Netlify's ~26s ceiling.
+      [siteResult, contentResult] = await Promise.all([
+        runPageSpeedCheck(effectiveUrl, GOOGLE_API_KEY, 15000),
+        runWebsiteContentCheck(effectiveUrl),
+      ]);
+    }
 
     let screenshot = null;
     if (siteResult) {
@@ -179,26 +314,56 @@ exports.handler = async (event) => {
       placesMatched = listingResult.found;
       placeTypes = listingResult.types || [];
       if (listingResult.found) {
-        matched = { name: listingResult.name || null, website: listingResult.website || null, url: url || null };
+        matched = { name: listingResult.name || null, website: effectiveUrl, url: effectiveUrl };
       }
       if (url && listingResult.website && !urlsMatch(url, listingResult.website)) {
         mismatch = "The website you entered doesn't match what's listed on this Google profile. Double-check you've got the right one.";
       }
     }
 
-    if (!url) {
+    if (siteFromListing) {
       raw.push({
-        key: 'no-website', domain: 'website', severity: 'high', title: 'Website',
-        value: 'none given', consequence: 'Add one for a speed and visibility check too.',
-        verdictPhrase: 'adding a website',
+        key: 'site-source', domain: 'website', severity: 'clear', title: 'Website checked',
+        value: 'from your listing', consequence: `We audited ${stripHost(effectiveUrl)} — the site linked on your Google profile.`,
+      });
+    }
+
+    if (!effectiveUrl) {
+      raw.push({
+        key: 'no-website', domain: 'website', severity: 'critical', title: 'No website',
+        value: 'none anywhere', consequence: 'Every patient who finds you on Google has nowhere to go — to see what you treat, judge whether you fit, or book. The listing alone rarely closes it.',
+        fix: 'Starter site', verdictOverride: 'The biggest gap: no website to send patients to.',
       });
     }
 
     const isHealthcare = detectHealthcareNiche(url, businessName, placeTypes);
 
     const findings = sortFindings(raw).map(withAliases);
-    const score = computeScore(findings);
+    let score = computeScore(findings);
+    // A practice with no website at all is not a 90. Cap it so the number
+    // reflects that most of "web presence" is missing, not merely unmeasured.
+    if (!effectiveUrl) score = Math.min(score, 45);
     const verdict = buildVerdict(findings);
+
+    const practiceType = placeTypes.find((t) =>
+      ['dentist', 'physiotherapist', 'doctor', 'hospital', 'pharmacy', 'veterinary_care'].includes(t)
+    ) || null;
+    const city = (listingResult && listingResult.city) || null;
+    const prominenceRank = (listingResult && listingResult.prominenceRank != null) ? listingResult.prominenceRank : null;
+    const nearbyTop3ForAI = (listingResult && listingResult.nearbyTop3) || null;
+
+    const [scoreContext, aiEnrichment] = await Promise.all([
+      getScoreContext(score, !!effectiveUrl),
+      enrichWithAI(findings, matched, practiceType, city, !!effectiveUrl, nearbyTop3ForAI),
+    ]);
+
+    if (aiEnrichment && aiEnrichment.sharpened) {
+      findings.forEach((f) => {
+        const sharp = aiEnrichment.sharpened[f.key];
+        if (sharp && typeof sharp === 'string') f.consequence = sharp;
+      });
+    }
+    const aiSummary = (aiEnrichment && aiEnrichment.summary) || null;
 
     let shown = findings.filter((f) => f.severity === 'critical' || f.severity === 'high').slice(0, 5);
     if (!shown.length) shown = findings.filter((f) => f.severity !== 'clear').slice(0, 3);
@@ -219,6 +384,8 @@ exports.handler = async (event) => {
           had_business_name: !!businessName || placesMatched,
           public_id: publicId,
           screenshot: screenshot || null,
+          ai_summary: aiSummary || null,
+          city: city || null,
         }).select('id').single();
         if (error) console.error('audits insert failed:', error.message);
         else auditId = row && row.id;
@@ -235,14 +402,19 @@ exports.handler = async (event) => {
         publicId,
         auditId,
         score,
+        scoreContext,
         verdict,
+        aiSummary,
+        city,
+        prominenceRank,
         findings,
         shownCount: shown.length,
         moreCount,
         screenshot,
         matched,
         isHealthcare,
-        hadWebsite: !!url,
+        hadWebsite: !!effectiveUrl,
+        siteFromListing,
         hadListing: placesMatched,
         mismatch,
         alreadyChecked: false,
@@ -373,13 +545,20 @@ function buildResultsEmailHtml({ search_query, health_score, findings, reportUrl
 
 /* ---------- Helpers ---------- */
 function parseInput(input) {
-  const parts = input.split(',').map((s) => s.trim());
-  let url = null, businessName = null;
-  const urlPattern = /(https?:\/\/)?([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[^\s]*)?/;
-  parts.forEach((part) => {
-    if (urlPattern.test(part)) { url = part.startsWith('http') ? part : `https://${part}`; }
-    else if (part) { businessName = part; }
-  });
+  const parts = input.split(',').map((s) => s.trim()).filter(Boolean);
+  // Only one comma-separated part should ever be the URL; everything else is
+  // the business name, rejoined — a name can legitimately contain a comma
+  // (e.g. a branch suffix: "SAGE Dental Clinic, MBROM"), and treating every
+  // non-URL part as an overwrite silently threw away everything but the
+  // last segment.
+  const urlPattern = /^(https?:\/\/)?([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[^\s]*)?$/;
+  let url = null;
+  const nameParts = [];
+  for (const part of parts) {
+    if (!url && urlPattern.test(part)) url = part.startsWith('http') ? part : `https://${part}`;
+    else nameParts.push(part);
+  }
+  const businessName = nameParts.length ? nameParts.join(', ') : null;
   return { url, businessName };
 }
 
@@ -398,19 +577,19 @@ function urlsMatch(url1, url2) {
 }
 
 /* ---------- Website: PageSpeed Insights ---------- */
-async function runPageSpeedCheck(targetUrl, apiKey) {
+async function runPageSpeedCheck(targetUrl, apiKey, timeoutMs) {
   const findings = [];
   const isHttps = targetUrl.startsWith('https://');
   const httpsFinding = isHttps
-    ? { key: 'secure-connection', domain: 'website', severity: 'clear', title: 'Secure connection', value: 'HTTPS' }
-    : { key: 'secure-connection', domain: 'website', severity: 'critical', title: 'Secure connection', value: 'no HTTPS', consequence: "Browsers flag your site as 'Not secure' before a patient submits anything.", fix: 'SSL fix', verdictPhrase: 'the missing HTTPS' };
+    ? { key: 'secure-connection', domain: 'website', severity: 'clear', title: 'Site security warning', value: 'no warning shown' }
+    : { key: 'secure-connection', domain: 'website', severity: 'critical', title: 'Site security warning', value: 'visible to patients', consequence: "Patients visiting your site see a 'Not secure' warning in their browser — many will leave immediately rather than enter their details.", fix: 'SSL fix', verdictPhrase: 'the security warning patients see on your site' };
 
   try {
-    const endpoint = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(targetUrl)}&strategy=mobile&category=performance&category=seo${apiKey ? `&key=${apiKey}` : ''}`;
+    const endpoint = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(targetUrl)}&strategy=mobile&category=performance&category=seo&category=accessibility${apiKey ? `&key=${apiKey}` : ''}`;
     // PSI's lab run is slow and highly variable (8-14s typical, longer for heavy
-    // sites). Give it 18s; it runs alone on the clock (Places is parallel) and
-    // Netlify's synchronous cap here is ~26s.
-    const res = await fetchWithTimeout(endpoint, { timeout: 18000 });
+    // sites). Caller sets the budget; it runs alone on the clock and Netlify's
+    // synchronous cap here is ~26s.
+    const res = await fetchWithTimeout(endpoint, { timeout: timeoutMs || 18000 });
     if (!res.ok) throw new Error(`PSI HTTP ${res.status}`);
     const data = await res.json();
 
@@ -420,8 +599,8 @@ async function runPageSpeedCheck(targetUrl, apiKey) {
       if (lcpMs) {
         const secs = (lcpMs / 1000).toFixed(1);
         findings.push(lcpMs > 2500
-          ? { key: 'phone-speed', domain: 'website', severity: 'high', title: 'Phone-site speed', value: `${secs}s`, benchmark: "Google's bar is 2.5s", consequence: 'Slow enough that many phone visitors leave before it loads.', fix: 'Speed Fix', verdictPhrase: 'your phone-site speed' }
-          : { key: 'phone-speed', domain: 'website', severity: 'clear', title: 'Phone-site speed', value: `${secs}s (real-user)` });
+          ? { key: 'phone-speed', domain: 'website', severity: 'high', title: 'Mobile load speed', value: `${secs}s`, benchmark: "Google's bar is 2.5s", consequence: 'Slow enough that many phone visitors leave before it loads.', fix: 'Speed Fix', verdictPhrase: 'your phone-site speed' }
+          : { key: 'phone-speed', domain: 'website', severity: 'clear', title: 'Mobile load speed', value: `${secs}s (real-user)` });
       } else {
         const rawMsg = ((data.error && data.error.message) || '').toLowerCase();
         let text = "We couldn't fully check that website right now.";
@@ -435,41 +614,90 @@ async function runPageSpeedCheck(targetUrl, apiKey) {
     }
 
     const lh = data.lighthouseResult;
+    const A = lh.audits || {};
     const perfScore = Math.round((lh.categories.performance?.score || 0) * 100);
     const seoScore = Math.round((lh.categories.seo?.score || 0) * 100);
-    const crawlable = lh.audits && lh.audits['is-crawlable'];
-    const screenshot = (lh.audits && lh.audits['final-screenshot'] && lh.audits['final-screenshot'].details && lh.audits['final-screenshot'].details.data) || null;
+    const a11yScore = lh.categories.accessibility ? Math.round((lh.categories.accessibility.score || 0) * 100) : null;
+    const crawlable = A['is-crawlable'];
+    const screenshot = (A['final-screenshot'] && A['final-screenshot'].details && A['final-screenshot'].details.data) || null;
+    const lcpSecs = A['largest-contentful-paint'] && A['largest-contentful-paint'].numericValue
+      ? (A['largest-contentful-paint'].numericValue / 1000).toFixed(1) : null;
 
     if (crawlable && crawlable.score === 0) {
-      findings.push({ key: 'crawlable', domain: 'website', severity: 'critical', title: 'Search visibility', value: 'blocking Google', consequence: 'Your site is telling Google not to list it — it may not appear in search at all.', fix: 'Crawlability fix', verdictPhrase: 'the pages hidden from Google' });
+      findings.push({ key: 'crawlable', domain: 'website', severity: 'critical', title: 'Hidden from Google', value: 'blocking Google', consequence: 'Your site is telling Google not to list it — it may not appear in search at all.', fix: 'Crawlability fix', verdictPhrase: 'the pages hidden from Google' });
     }
 
     if (perfScore < 70) {
-      findings.push({ key: 'phone-speed', domain: 'website', severity: perfScore < 45 ? 'high' : 'medium', bump: perfScore < 45 ? 10 : 0, title: 'Phone-site speed', value: `${perfScore}/100`, consequence: 'Slow enough that visitors may leave before it loads.', fix: 'Speed Fix', verdictPhrase: 'your phone-site speed' });
+      findings.push({ key: 'phone-speed', domain: 'website', severity: perfScore < 45 ? 'high' : 'medium', bump: perfScore < 45 ? 10 : 0, title: 'Mobile load speed', value: lcpSecs ? `${lcpSecs}s to load` : `${perfScore}/100`, benchmark: "patients bounce past ~3s", consequence: 'Slow enough that visitors may leave before it loads.', fix: 'Speed Fix', verdictPhrase: 'your phone-site speed' });
     } else {
-      findings.push({ key: 'phone-speed', domain: 'website', severity: 'clear', title: 'Phone-site speed', value: `${perfScore}/100` });
+      findings.push({ key: 'phone-speed', domain: 'website', severity: 'clear', title: 'Mobile load speed', value: lcpSecs ? `${lcpSecs}s` : `${perfScore}/100` });
     }
 
+    // The single biggest, most concrete speed cause — a number, not a grade.
+    const opp = biggestSpeedOpportunity(A);
+    if (opp && perfScore < 90) findings.push(opp);
+
     if (seoScore < 80) {
-      findings.push({ key: 'search-basics', domain: 'website', severity: 'medium', title: 'Search basics', value: `${seoScore}/100`, consequence: 'Missing on-page basics that help patients find your specialty on Google.', fix: 'On-page SEO', verdictPhrase: 'your search basics' });
+      findings.push({ key: 'search-basics', domain: 'website', severity: 'medium', title: 'Google search basics', value: `${seoScore}/100`, consequence: 'Missing on-page basics that help patients find your specialty on Google.', fix: 'On-page SEO', verdictPhrase: 'your search basics' });
     } else {
-      findings.push({ key: 'search-basics', domain: 'website', severity: 'clear', title: 'Search basics', value: `${seoScore}/100` });
+      findings.push({ key: 'search-basics', domain: 'website', severity: 'clear', title: 'Google search basics', value: `${seoScore}/100` });
+    }
+
+    if (a11yScore != null) {
+      if (a11yScore < 85) {
+        findings.push({ key: 'accessibility', domain: 'website', severity: 'medium', title: 'Easy to read for all patients', value: `${a11yScore}/100`, consequence: 'Low-contrast text, unlabelled buttons and small tap targets shut out older patients and anyone using a screen reader.', fix: 'Accessibility pass', verdictPhrase: 'accessibility' });
+      } else {
+        findings.push({ key: 'accessibility', domain: 'website', severity: 'clear', title: 'Easy to read for all patients', value: `${a11yScore}/100` });
+      }
     }
 
     findings.push(httpsFinding);
     return { findings, screenshot };
   } catch (e) {
     findings.push(e.name === 'AbortError'
-      ? { key: 'phone-speed', domain: 'website', severity: 'low', title: 'Phone-site speed', value: 'not measured', consequence: 'The deep speed check ran long on this site — the full report will include it.' }
+      ? { key: 'phone-speed', domain: 'website', severity: 'high', title: 'Mobile load speed', value: 'too slow to measure', consequence: 'Your site took too long to load on a phone. Most patients will leave before it opens.', fix: 'Speed Fix', verdictPhrase: 'your mobile load speed' }
       : { key: 'site-reach', domain: 'website', severity: 'medium', title: 'Website check', value: 'unreachable', consequence: `We couldn't reach ${targetUrl} to run a check.` });
     findings.push(httpsFinding);
     return { findings, screenshot: null };
   }
 }
 
+// Turns Lighthouse's opportunity audits into one plain, numeric finding.
+function biggestSpeedOpportunity(A) {
+  const cands = [
+    { id: 'uses-optimized-images', label: 'Large images slowing your site', fix: 'Speed Fix' },
+    { id: 'modern-image-formats', label: 'Images in old formats', fix: 'Speed Fix' },
+    { id: 'render-blocking-resources', label: 'Code slowing page load', fix: 'Speed Fix' },
+    { id: 'unused-javascript', label: 'Unnecessary code', fix: 'Speed Fix' },
+    { id: 'unminified-javascript', label: 'Unminified JavaScript', fix: 'Speed Fix' },
+    { id: 'server-response-time', label: 'Slow hosting', fix: 'Hosting review' },
+  ];
+  let best = null;
+  for (const c of cands) {
+    const a = A[c.id];
+    const ms = a && a.details && (a.details.overallSavingsMs || a.numericValue);
+    if (ms && ms > (best ? best.ms : 700)) best = { ...c, ms };
+  }
+  if (A['total-byte-weight'] && A['total-byte-weight'].numericValue > 3_000_000) {
+    const mb = (A['total-byte-weight'].numericValue / 1_000_000).toFixed(1);
+    if (!best || best.ms < 1500) return { key: 'page-weight', domain: 'website', severity: 'medium', title: 'Site too heavy to load', value: `${mb} MB homepage`, consequence: 'Every visit downloads that much — slow and costly on a phone plan.', fix: 'Speed Fix' };
+  }
+  if (!best) return null;
+  return { key: 'speed-cause', domain: 'website', severity: 'medium', title: best.label, value: `~${(best.ms / 1000).toFixed(1)}s to save`, consequence: 'The biggest single thing slowing your page down.', fix: best.fix };
+}
+
 /* ---------- Website: one homepage fetch, parsed ---------- */
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const BOOKING_WIDGETS = /(calendly\.com|acuityscheduling|acuity\.com|nexhealth|zocdoc|squarespace-scheduling|setmore|simplybook|localmed|yapi|solutionreach|doctible|weave|dentrixascend|adit\.com)/i;
+const SOCIAL_DOMAINS = ['facebook.com', 'instagram.com', 'twitter.com', 'x.com', 'linkedin.com', 'youtube.com', 'tiktok.com', 'pinterest.com', 'snapchat.com', 'threads.net'];
+
+// WhatsApp alone does not count as a social media presence.
+function checkSocialMedia(html, findings) {
+  const hasSocial = SOCIAL_DOMAINS.some((domain) => html.includes(domain));
+  if (!hasSocial) {
+    findings.push({ key: 'social-media', domain: 'website', severity: 'medium', title: 'Social media presence', value: 'none linked', consequence: 'No social media presence linked from your site — patients check social to see if a practice is active before they book.', fix: 'Social media setup' });
+  }
+}
 
 async function runWebsiteContentCheck(targetUrl) {
   const findings = [];
@@ -499,15 +727,65 @@ async function runWebsiteContentCheck(targetUrl) {
 
   checkContactFriction(html, findings);
   checkImprovementLayer(html, findings, finalUrl);
-  await checkBrokenLinks(html, finalUrl, findings);
+  checkSocialMedia(html, findings);
+  await Promise.all([
+    checkBrokenLinks(html, finalUrl, findings),
+    checkKeyPages(html, finalUrl, findings),
+  ]);
 
   return { findings, html, finalUrl };
+}
+
+// Homepage is not the whole site. Sample up to 4 internal pages and report the
+// aggregate — "3 of 5 pages have no search description" is a concrete finding.
+async function checkKeyPages(html, baseUrl, findings) {
+  let origin;
+  try { origin = new URL(baseUrl).origin; } catch { return; }
+  const seen = new Set([baseUrl.replace(/#.*$/, '').replace(/\/$/, '')]);
+  const urls = [];
+  const re = /href\s*=\s*["']([^"']+)["']/gi;
+  let m;
+  while ((m = re.exec(html)) && urls.length < 4) {
+    let abs;
+    try { abs = new URL(m[1], baseUrl); } catch { continue; }
+    if (abs.origin !== origin) continue;
+    if (/\.(pdf|jpg|jpeg|png|gif|svg|zip|doc|docx)$/i.test(abs.pathname)) continue;
+    const norm = (abs.origin + abs.pathname).replace(/\/$/, '');
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    urls.push(norm);
+  }
+  if (!urls.length) return;
+
+  const pages = await Promise.all(urls.map(async (u) => {
+    try {
+      const r = await fetchWithTimeout(u, { timeout: 5000, redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
+      if (!r.ok) return null;
+      const h = (await r.text()).slice(0, 120000);
+      const md = (h.match(/<meta[^>]+name\s*=\s*["']?description["']?[^>]*content\s*=\s*["']([^"']{20,})["']/i) || [])[1];
+      const h1 = /<h1[\s>]/i.test(h);
+      const title = (h.match(/<title[^>]*>([^<]{5,})<\/title>/i) || [])[1];
+      return { md: !!md, h1, title: !!title };
+    } catch { return null; }
+  }));
+  const ok = pages.filter(Boolean);
+  const total = ok.length + 1; // + homepage
+  if (!ok.length) return;
+
+  const noDesc = ok.filter((p) => !p.md).length;
+  if (noDesc >= 1) {
+    findings.push({ key: 'pages-meta', domain: 'website', severity: 'low', title: 'Search descriptions', value: `${noDesc} of ${total} pages missing`, consequence: 'Google shows a snippet under each page in results — pages without one look like an afterthought.', fix: 'On-page SEO' });
+  }
+  const noH1 = ok.filter((p) => !p.h1).length;
+  if (noH1 >= 1) {
+    findings.push({ key: 'pages-h1', domain: 'website', severity: 'low', title: 'Page structure', value: `${noH1} of ${total} pages have no clear heading`, consequence: "A page with no main heading is harder for Google and skim-readers to place.", fix: 'On-page SEO' });
+  }
 }
 
 function checkContactFriction(html, findings) {
   const hasTel = /href\s*=\s*["']tel:/i.test(html);
   if (!hasTel) {
-    findings.push({ key: 'tap-to-call', domain: 'website', severity: 'medium', title: 'Tap-to-call', value: 'missing', consequence: "Your phone number isn't a tappable link — mobile patients have to copy it out by hand.", fix: 'Click-to-call', verdictPhrase: 'a tap-to-call number' });
+    findings.push({ key: 'tap-to-call', domain: 'website', severity: 'medium', title: 'One-tap calling', value: 'missing', consequence: "Your phone number isn't a tappable link — mobile patients have to copy it out by hand.", fix: 'Click-to-call', verdictPhrase: 'a tap-to-call number' });
   }
 
   const bookingRe = /book(?:ing)?\s*(?:online|now|a?\s*appointment|an?\s*appointment)?|request\s*(?:an?\s*)?appointment|schedule\s*(?:a\s*)?(?:visit|appointment)|make\s*an?\s*appointment/i;
@@ -518,12 +796,12 @@ function checkContactFriction(html, findings) {
 
   const hasForm = /<form\b/i.test(html) || BOOKING_WIDGETS.test(html);
   if (!hasForm) {
-    findings.push({ key: 'contact-form', domain: 'website', severity: 'low', title: 'Contact form', value: 'none', consequence: 'Phone-only contact — you lose people who would rather type than call, and after-hours enquiries.', fix: 'Form / booking embed' });
+    findings.push({ key: 'contact-form', domain: 'website', severity: 'low', title: 'Online enquiry form', value: 'none', consequence: 'Phone-only contact — you lose people who would rather type than call, and after-hours enquiries.', fix: 'Form / booking embed' });
   }
 
   const hasAddress = /google\.com\/maps|maps\.google\.|<address\b|"@type"\s*:\s*"PostalAddress"|itemprop\s*=\s*["']address["']|<iframe[^>]+(?:google[^>]+maps|maps\.google)/i.test(html);
   if (!hasAddress) {
-    findings.push({ key: 'address-map', domain: 'website', severity: 'low', title: 'Address on site', value: 'not found', consequence: 'No address or embedded map on the homepage — hurts local trust and how you rank nearby.', fix: 'Add address + map' });
+    findings.push({ key: 'address-map', domain: 'website', severity: 'low', title: 'Address on your website', value: 'not found', consequence: 'No address or embedded map on the homepage — hurts local trust and how you rank nearby.', fix: 'Add address + map' });
   }
 }
 
@@ -535,28 +813,38 @@ function checkImprovementLayer(html, findings, finalUrl) {
   const metaDesc = (metaTag.match(/\bcontent\s*=\s*["']([^"']*)["']/i) || [])[1]
     || (metaTag.match(/\bcontent\s*=\s*([^\s">]+)/i) || [])[1] || '';
   if (metaDesc.trim().length < 50) {
-    findings.push({ key: 'meta-description', domain: 'website', severity: 'low', title: 'Search description', value: metaDesc ? 'too short' : 'missing', consequence: "Google shows a summary of your page in results — yours is missing or too thin to be useful.", fix: 'On-page SEO' });
+    findings.push({ key: 'meta-description', domain: 'website', severity: 'low', title: 'Google search preview', value: metaDesc ? 'too short' : 'missing', consequence: "Google shows a summary of your page in results — yours is missing or too thin to be useful.", fix: 'On-page SEO' });
   }
 
   const imgs = html.match(/<img\b[^>]*>/gi) || [];
   const withAlt = imgs.filter((t) => /\balt\s*=/i.test(t)).length;
   if (imgs.length >= 4 && withAlt / imgs.length < 0.6) {
-    findings.push({ key: 'image-alt', domain: 'website', severity: 'low', title: 'Image alt text', value: `${imgs.length - withAlt} of ${imgs.length} missing`, consequence: 'Images without alt text are invisible to screen readers and to Google image search.', fix: 'Accessibility pass' });
+    findings.push({ key: 'image-alt', domain: 'website', severity: 'low', title: 'Image descriptions', value: `${imgs.length - withAlt} of ${imgs.length} missing`, consequence: 'Images without alt text are invisible to screen readers and to Google image search.', fix: 'Accessibility pass' });
   }
 
   const haystack = html.toLowerCase();
   const hasPage = (re) => re.test(haystack);
   if (!hasPage(/new[\s-]?patient/)) {
-    findings.push({ key: 'new-patients-page', domain: 'website', severity: 'low', title: 'New-patients page', value: 'not found', consequence: "Nothing aimed at a first-time patient — what to bring, what to expect, how to register.", fix: 'New-patients page' });
+    findings.push({ key: 'new-patients-page', domain: 'website', severity: 'low', title: 'New patients page', value: 'not found', consequence: "Nothing aimed at a first-time patient — what to bring, what to expect, how to register.", fix: 'New-patients page' });
   }
   if (!hasPage(/our[\s-]?team|meet[\s-]the|our[\s-]?(?:doctors|dentists|physios|providers|staff)|\bbios?\b/)) {
-    findings.push({ key: 'team-page', domain: 'website', severity: 'low', title: 'Team / bios page', value: 'not found', consequence: 'No practitioner bios — patients pick a provider partly on who they will actually see.', fix: 'Team page' });
+    findings.push({ key: 'team-page', domain: 'website', severity: 'low', title: 'Meet the team page', value: 'not found', consequence: 'No practitioner bios — patients pick a provider partly on who they will actually see.', fix: 'Team page' });
   }
   if (!hasPage(/\bfaq\b|frequently\s+asked/)) {
-    findings.push({ key: 'faq-page', domain: 'website', severity: 'low', title: 'FAQ', value: 'not found', consequence: 'Common questions (insurance, first visit, hours) answered on the page cut down phone back-and-forth.', fix: 'FAQ page' });
+    findings.push({ key: 'faq-page', domain: 'website', severity: 'low', title: 'Questions & answers page', value: 'not found', consequence: 'Common questions (insurance, first visit, hours) answered on the page cut down phone back-and-forth.', fix: 'FAQ page' });
   }
   if (!hasPage(/insurance|\bfees\b|payment\s+options|financing|self[\s-]?pay/)) {
-    findings.push({ key: 'fees-info', domain: 'website', severity: 'low', title: 'Fees / insurance info', value: 'not found', consequence: "Patients want cost and insurance answered before they call — silence sends them elsewhere.", fix: 'Fees / insurance page' });
+    findings.push({ key: 'fees-info', domain: 'website', severity: 'low', title: 'Fees & payment info', value: 'not found', consequence: "Patients want cost and insurance answered before they call — silence sends them elsewhere.", fix: 'Fees / insurance page' });
+  }
+
+  // Structured data — how Google reads your hours, address and services off the page.
+  const ldBlocks = html.match(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi) || [];
+  const ld = ldBlocks.join(' ');
+  const hasLocalSchema = /"@type"\s*:\s*"(MedicalBusiness|MedicalClinic|MedicalOrganization|Dentist|Physician|Hospital|LocalBusiness|Pharmacy|Optometric|DiagnosticLab)"/i.test(ld);
+  if (!ldBlocks.length) {
+    findings.push({ key: 'schema', domain: 'website', severity: 'medium', title: 'Practice info for Google', value: 'none', consequence: "Nothing tells Google your name, address, hours and services in a form it trusts — it has to guess from the page.", fix: 'On-page SEO', verdictPhrase: 'your structured data' });
+  } else if (!hasLocalSchema) {
+    findings.push({ key: 'schema', domain: 'website', severity: 'low', title: 'Practice info for Google', value: 'no practice type', consequence: "Your page has some structured data, but nothing marking it as a healthcare practice — a missed signal for local search.", fix: 'On-page SEO' });
   }
 }
 
@@ -612,7 +900,46 @@ function nameLooksLikeMatch(typed, found) {
   return overlap >= Math.max(1, Math.ceil(t.length * 0.4));
 }
 
-async function runGooglePlacesCheck(targetQuery, apiKey) {
+// Phone extraction for a NAP (name-address-phone) match. A `tel:` link is an
+// intentional, high-confidence signal — prefer it. Only fall back to scanning
+// visible text (never scripts/styles/markup, which hide analytics IDs, JSON-LD
+// fields, etc.), and even then require something phone-shaped: 7-15 digits,
+// not immediately preceded by a currency symbol (a price, not a number).
+function extractPhoneFromHtml(html) {
+  const telMatch = html.match(/href\s*=\s*["']tel:([^"']+)["']/i);
+  if (telMatch) {
+    const digits = telMatch[1].replace(/\D/g, '');
+    if (digits.length >= 7) return digits;
+  }
+
+  const visible = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ');
+  const candidates = visible.match(/[$£€]?\s*\+?\d[\d\s\-().]{6,18}\d/g) || [];
+  for (const c of candidates) {
+    if (/^[$£€]/.test(c.trim())) continue; // a price, not a phone number
+    const digits = c.replace(/\D/g, '');
+    if (digits.length >= 7 && digits.length <= 15) return digits;
+  }
+  return null;
+}
+
+function normalisePhone(phone) {
+  return String(phone || '').replace(/\D/g, '').slice(-9);
+}
+
+const TYPE_LABELS = {
+  dentist: 'dental clinics',
+  physiotherapist: 'physiotherapy practices',
+  doctor: 'medical practices',
+  hospital: 'hospitals',
+  pharmacy: 'pharmacies',
+  veterinary_care: 'vet practices',
+  spa: 'wellness centres',
+};
+
+async function runGooglePlacesCheck(targetQuery, apiKey, contentHtmlPromise) {
   const findings = [];
   if (!apiKey) return { findings, website: null, found: false, types: [] };
 
@@ -633,7 +960,7 @@ async function runGooglePlacesCheck(targetQuery, apiKey) {
 
     const candidate = data.candidates && data.candidates[0];
     if (!candidate || !nameLooksLikeMatch(cleanQuery, candidate.name)) {
-      findings.push({ key: 'no-listing', domain: 'listing', severity: 'critical', title: 'Google Business Profile', value: 'not found', consequence: 'No Google listing found under this name — patients searching Maps for a nearby practice never see you.', fix: 'Listing setup + verification', verdictPhrase: 'your missing Google listing' });
+      findings.push({ key: 'no-listing', domain: 'listing', severity: 'critical', title: 'Google listing', value: 'not found', consequence: 'No Google listing found under this name — patients searching Maps for a nearby practice never see you.', fix: 'Listing setup + verification', verdictPhrase: 'your missing Google listing' });
       return { findings, website: null, found: false, types: [] };
     }
 
@@ -643,40 +970,111 @@ async function runGooglePlacesCheck(targetQuery, apiKey) {
     const location = (candidate.geometry && candidate.geometry.location) || null;
     const nearbyType = pickNearbyType(candidate.types);
 
-    // Place Details (website + real hours + review recency) and the nearby
-    // median run together, still parallel to PageSpeed.
-    const [details, nearbyMedian] = await Promise.all([
+    // Place Details (website + real hours + review recency), nearby review
+    // stats, reverse geocoding, and the prominence-rank search all run
+    // together, still parallel to PageSpeed. The homepage-content promise is
+    // already in flight from the caller (or already resolved) — awaiting it
+    // here costs nothing extra beyond whatever time it still needs.
+    const [details, nearbyStats, city, prominenceRank, contentCheck] = await Promise.all([
       placeId ? getPlaceDetails(placeId, apiKey) : Promise.resolve({}),
-      (location && nearbyType) ? getNearbyReviewMedian(location, nearbyType, placeId, apiKey) : Promise.resolve(null),
+      (location && nearbyType) ? getNearbyReviewStats(location, nearbyType, placeId, apiKey) : Promise.resolve(null),
+      location ? getCityFromCoords(location.lat, location.lng, apiKey) : Promise.resolve(null),
+      (location && nearbyType && placeId) ? getProminenceRank(location, nearbyType, placeId, apiKey) : Promise.resolve(null),
+      contentHtmlPromise || Promise.resolve(null),
     ]);
+    const contentHtml = contentCheck && contentCheck.html ? contentCheck.html : null;
     const website = details.website || null;
     const hoursSet = !!(details.openingHours && (details.openingHours.weekday_text || details.openingHours.periods));
     const reviewAgeDays = details.newestReviewDays ?? null;
+    const nearbyMedian = nearbyStats ? nearbyStats.median : null;
+    const nearbyTop3 = nearbyStats && nearbyStats.top3 && nearbyStats.top3.length ? nearbyStats.top3 : null;
+
+    // The listing itself says the practice is closed — outranks everything else.
+    if (details.businessStatus === 'CLOSED_PERMANENTLY' || details.businessStatus === 'CLOSED_TEMPORARILY') {
+      const perm = details.businessStatus === 'CLOSED_PERMANENTLY';
+      findings.push({ key: 'business-closed', domain: 'listing', severity: 'critical', title: perm ? 'Listed as permanently closed' : 'Listed as temporarily closed', value: 'on Google', consequence: perm ? 'Google shows your practice as closed — patients searching for you are told to go elsewhere.' : "Google shows you as closed right now — patients who'd otherwise call are turned away before they try.", fix: 'Listing correction', verdictPhrase: 'your listing showing as closed' });
+    }
 
     // One reviews finding, decided with the best data available.
     if (!reviews) {
       findings.push({ key: 'reviews', domain: 'listing', severity: 'high', title: 'Google reviews', value: 'none yet', consequence: 'Patients compare practices on reviews before anything else.', fix: 'Review system', verdictPhrase: 'your reviews' });
     } else if (nearbyMedian && nearbyMedian >= 10 && reviews < nearbyMedian * 0.5) {
       const far = reviews < nearbyMedian * 0.33;
-      findings.push({ key: 'reviews', domain: 'listing', severity: far ? 'high' : 'medium', bump: far ? 10 : 0, title: 'Reviews vs. your area', value: `${reviews} · ${rating}★`, benchmark: `area median ${nearbyMedian}`, consequence: `Practices near you carry around ${nearbyMedian} reviews — patients compare and pick the bigger number.`, fix: 'Review system', verdictPhrase: 'your reviews' });
+      const benchmark = nearbyTop3 ? `nearby: ${nearbyTop3.join(', ')}` : `area median ${nearbyMedian}`;
+      const consequence = nearbyTop3
+        ? `The closest ${nearbyTop3.length} practices carry ${nearbyTop3.join(', ')} reviews — patients compare and pick the bigger number.`
+        : `Practices near you carry around ${nearbyMedian} reviews — patients compare and pick the bigger number.`;
+      findings.push({ key: 'reviews', domain: 'listing', severity: far ? 'high' : 'medium', bump: far ? 10 : 0, title: 'Reviews vs. your area', value: `${reviews} · ${rating}★`, benchmark, consequence, fix: 'Review system', verdictPhrase: 'your reviews' });
     } else if (reviews < 5) {
       findings.push({ key: 'reviews', domain: 'listing', severity: 'medium', title: 'Google reviews', value: `${reviews} · ${rating}★`, consequence: 'Thin next to nearby practices — patients notice.', fix: 'Review system', verdictPhrase: 'your reviews' });
     } else if (rating && rating < 4.3) {
       findings.push({ key: 'reviews', domain: 'listing', severity: 'medium', title: 'Google rating', value: `${rating}★ · ${reviews} reviews`, benchmark: 'patients trust 4.3★+', consequence: 'Below the rating most patients will book from without a second look.', fix: 'Reputation repair + review flow', verdictPhrase: 'your rating' });
+    } else if (!nearbyMedian && reviews < 15) {
+      // No area data to compare against, and the count itself is on the low
+      // side — calling this "clear" would be green on thin data.
+      findings.push({ key: 'reviews', domain: 'listing', severity: 'medium', title: 'Google reviews', value: `${reviews} · ${rating}★`, consequence: "We couldn't compare this to nearby practices, and it's on the low side — worth building up.", fix: 'Review system', verdictPhrase: 'your reviews' });
     } else {
       findings.push({ key: 'reviews', domain: 'listing', severity: 'clear', title: 'Google reviews', value: `${reviews} · ${rating}★` });
     }
 
-    if (reviews && reviewAgeDays != null && reviewAgeDays > 183) {
+    if (reviews && reviewAgeDays != null && reviewAgeDays > 90) {
       const months = Math.round(reviewAgeDays / 30);
-      findings.push({ key: 'review-recency', domain: 'listing', severity: 'medium', title: 'Review recency', value: `newest is ~${months} mo old`, consequence: 'A listing with no recent reviews reads as a practice that has gone quiet — or closed.', fix: 'Review system', verdictPhrase: 'your stale reviews' });
+      findings.push({ key: 'review-recency', domain: 'listing', severity: 'high', title: 'Review recency', value: `newest is ~${months} mo old`, consequence: 'A listing with no recent reviews reads as a practice that has gone quiet — or closed.', fix: 'Review system', verdictPhrase: 'your stale reviews' });
     }
 
     if (!hoursSet) {
-      findings.push({ key: 'listing-hours', domain: 'listing', severity: 'medium', title: 'Listing hours', value: 'not set', consequence: "Patients can't tell if you're open right now.", fix: 'Profile fill', verdictPhrase: 'your missing listing hours' });
+      findings.push({ key: 'listing-hours', domain: 'listing', severity: 'medium', title: 'Opening hours on Google', value: 'not set', consequence: "Patients can't tell if you're open right now.", fix: 'Profile fill', verdictPhrase: 'your missing listing hours' });
     }
-    if (!candidate.photos || !candidate.photos.length) {
-      findings.push({ key: 'listing-photos', domain: 'listing', severity: 'low', title: 'Listing photos', value: 'none', consequence: 'Listings with photos get more clicks and calls.', fix: 'Photo set' });
+
+    if (!details.phone) {
+      findings.push({ key: 'listing-phone', domain: 'listing', severity: 'medium', title: 'Phone number on Google', value: 'not set', consequence: "No number on your Google listing — patients who'd otherwise tap to call have to go find it on your site first.", fix: 'Profile fill', verdictPhrase: 'the missing phone number on your listing' });
+    }
+
+    // A category like "Health" or "Point of interest" tells Google (and search)
+    // nothing about what you actually treat — a specific one is how you surface
+    // for "dentist near me" instead of just "business near me".
+    const GENERIC_TYPES = new Set(['point_of_interest', 'establishment', 'health']);
+    const hasSpecificType = (candidate.types || []).some((t) => !GENERIC_TYPES.has(t));
+    if (!hasSpecificType) {
+      findings.push({ key: 'listing-category', domain: 'listing', severity: 'low', title: 'Practice type on Google', value: 'too generic', consequence: "Your Google category doesn't say what you treat — patients searching for a specific practice type may never see you.", fix: 'Profile fill' });
+    }
+
+    const photoCount = details.photoCount || (candidate.photos ? candidate.photos.length : 0);
+    if (!photoCount) {
+      findings.push({ key: 'listing-photos', domain: 'listing', severity: 'medium', title: 'Listing photos', value: 'none', consequence: 'A listing with no photos reads as abandoned — patients scroll past to one that has them.', fix: 'Photo set' });
+    } else if (photoCount < 6) {
+      findings.push({ key: 'listing-photos', domain: 'listing', severity: 'medium', title: 'Listing photos', value: `${photoCount} photo${photoCount === 1 ? '' : 's'}`, consequence: 'A handful of photos is thin next to practices with a full set of the space and team.', fix: 'Photo set' });
+    } else {
+      findings.push({ key: 'listing-photos', domain: 'listing', severity: 'clear', title: 'Listing photos', value: `${photoCount} photos` });
+    }
+
+    // NAP (name-address-phone) consistency — only checkable once we actually
+    // have both numbers; silently skipped otherwise (e.g. name-only path,
+    // before the discovered site's homepage has been fetched).
+    if (details.phone && contentHtml) {
+      const gbpPhone = normalisePhone(details.phone);
+      const sitePhone = normalisePhone(extractPhoneFromHtml(contentHtml));
+      if (sitePhone && gbpPhone && sitePhone !== gbpPhone) {
+        findings.push({ key: 'nap-consistency', domain: 'listing', severity: 'high', title: 'Phone number mismatch', value: 'Google vs website differ', consequence: "Your phone number on Google doesn't match your website — Google treats this inconsistency as a trust signal against you in local rankings.", fix: 'NAP correction' });
+      }
+    }
+
+    if (!details.description) {
+      findings.push({ key: 'gbp-description', domain: 'listing', severity: 'medium', title: 'Google profile description', value: 'not written', consequence: "No description on your Google profile — this is prime space to tell patients what you treat and why to choose you. Most competitors leave it blank, making this an easy win.", fix: 'Profile fill' });
+    }
+
+    const practiceTypeLabel = TYPE_LABELS[nearbyType] || 'healthcare practices';
+    if (nearbyType && placeId) {
+      // position is 1-indexed; null means not found in Google's top 20 nearby.
+      if (prominenceRank === null || prominenceRank > 10) {
+        findings.push({ key: 'maps-rank', domain: 'listing', severity: 'high', title: 'Google Maps ranking', value: 'outside top 10', consequence: `Your listing isn't appearing in the top 10 ${practiceTypeLabel} near you — most patients searching Google Maps won't find you.`, fix: 'Local SEO' });
+      } else if (prominenceRank <= 3) {
+        findings.push({ key: 'maps-rank', domain: 'listing', severity: 'clear', title: 'Google Maps ranking', value: 'top 3 nearby' });
+      } else if (prominenceRank <= 6) {
+        findings.push({ key: 'maps-rank', domain: 'listing', severity: 'medium', title: 'Google Maps ranking', value: `#${prominenceRank} nearby`, consequence: `Ranked roughly #${prominenceRank} among ${practiceTypeLabel} near you — patients usually pick from the top 3.`, fix: 'Local SEO' });
+      } else {
+        findings.push({ key: 'maps-rank', domain: 'listing', severity: 'high', title: 'Google Maps ranking', value: `#${prominenceRank} nearby`, consequence: `Ranked #${prominenceRank} among nearby ${practiceTypeLabel} — most patients searching Maps won't scroll this far.`, fix: 'Local SEO' });
+      }
     }
 
     return {
@@ -689,6 +1087,9 @@ async function runGooglePlacesCheck(targetQuery, apiKey) {
       reviews,
       placeId,
       location,
+      city,
+      prominenceRank,
+      nearbyTop3,
     };
   } catch (e) {
     findings.push({ key: 'listing-check', domain: 'listing', severity: 'medium', title: 'Google listing', value: 'not checked', consequence: "Couldn't check your Google listing right now. Try again shortly." });
@@ -706,7 +1107,8 @@ function pickNearbyType(types) {
 // One Place Details call for the fields findplacefromtext can't return.
 async function getPlaceDetails(placeId, apiKey) {
   try {
-    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&fields=website,opening_hours,reviews&reviews_sort=newest&key=${apiKey}`;
+    const fields = 'website,opening_hours,reviews,formatted_phone_number,business_status,editorial_summary,photos';
+    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&fields=${fields}&reviews_sort=newest&key=${apiKey}`;
     const res = await fetchWithTimeout(url, { timeout: 6000 });
     const data = await res.json();
     if (data.status !== 'OK') {
@@ -719,6 +1121,10 @@ async function getPlaceDetails(placeId, apiKey) {
       website: r.website || null,
       openingHours: r.opening_hours || null,
       newestReviewDays: times.length ? Math.round((Date.now() / 1000 - Math.max(...times)) / 86400) : null,
+      phone: r.formatted_phone_number || null,
+      businessStatus: r.business_status || null,
+      description: (r.editorial_summary && r.editorial_summary.overview) || null,
+      photoCount: Array.isArray(r.photos) ? r.photos.length : 0,
     };
   } catch (e) {
     console.error('Place Details failed:', e.message);
@@ -726,21 +1132,61 @@ async function getPlaceDetails(placeId, apiKey) {
   }
 }
 
-async function getNearbyReviewMedian(location, type, ownPlaceId, apiKey) {
+// Real review counts of the nearest same-type practices — concrete numbers beat
+// a bare median.
+async function getNearbyReviewStats(location, type, ownPlaceId, apiKey) {
   try {
     const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${location.lat},${location.lng}&rankby=distance&type=${encodeURIComponent(type)}&key=${apiKey}`;
     const res = await fetchWithTimeout(url, { timeout: 6000 });
     const data = await res.json();
     const counts = (data.results || [])
-      .filter((r) => r.place_id !== ownPlaceId && typeof r.user_ratings_total === 'number')
+      .filter((r) => r.place_id !== ownPlaceId && typeof r.user_ratings_total === 'number' && r.user_ratings_total > 0)
       .slice(0, 15)
       .map((r) => r.user_ratings_total)
-      .sort((a, b) => a - b);
-    if (counts.length < 4) return null; // not enough neighbours to be a real benchmark
-    const mid = Math.floor(counts.length / 2);
-    return counts.length % 2 ? counts[mid] : Math.round((counts[mid - 1] + counts[mid]) / 2);
+      .sort((a, b) => b - a);
+    if (counts.length < 4) return null;
+    const asc = [...counts].sort((a, b) => a - b);
+    const mid = Math.floor(asc.length / 2);
+    return {
+      median: asc.length % 2 ? asc[mid] : Math.round((asc[mid - 1] + asc[mid]) / 2),
+      top3: counts.slice(0, 3),
+    };
   } catch (e) {
-    console.error('nearby median check failed:', e.message);
+    console.error('nearby stats check failed:', e.message);
+    return null;
+  }
+}
+
+// Turns the listing's lat/lng into a city name for copy/AI-enrichment context.
+async function getCityFromCoords(lat, lng, apiKey) {
+  try {
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${apiKey}`;
+    const res = await fetchWithTimeout(url, { timeout: 4000 });
+    const data = await res.json();
+    const components = (data.results && data.results[0] && data.results[0].address_components) || [];
+    const city = (components.find((c) => c.types.includes('locality')) || {}).long_name
+      || (components.find((c) => c.types.includes('administrative_area_level_2')) || {}).long_name
+      || null;
+    return city;
+  } catch (e) {
+    console.error('Reverse geocoding failed:', e.message);
+    return null;
+  }
+}
+
+// Where the listing lands in a prominence-ranked nearby search — the same
+// ordering patients see when Google Maps sorts by relevance rather than
+// distance. 1-indexed; null means outside the top 20 returned.
+async function getProminenceRank(location, type, ownPlaceId, apiKey) {
+  try {
+    const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${location.lat},${location.lng}&rankby=prominence&type=${encodeURIComponent(type)}&key=${apiKey}`;
+    const res = await fetchWithTimeout(url, { timeout: 6000 });
+    const data = await res.json();
+    const results = data.results || [];
+    const position = results.findIndex((r) => r.place_id === ownPlaceId);
+    return position === -1 ? null : position + 1;
+  } catch (e) {
+    console.error('Prominence rank check failed:', e.message);
     return null;
   }
 }

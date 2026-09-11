@@ -76,6 +76,7 @@ function initAuditBar() {
   const dialEl = document.getElementById('audit-dial');
   const scoreEl = document.getElementById('audit-score');
   const verdictEl = document.getElementById('audit-verdict');
+  const contextEl = document.getElementById('audit-context');
   const noticeEl = document.getElementById('audit-notice');
   const findingsList = document.getElementById('audit-findings');
   const moreEl = document.getElementById('audit-more');
@@ -89,10 +90,10 @@ function initAuditBar() {
   let loadingInterval;
 
   const loadingMessages = [
-    "Checking what's public about your practice…",
-    'Looking up your Google listing…',
-    'Checking your site on a phone…',
-    'Sorting what matters most…',
+    'Checking your Google presence…',
+    'Analysing your website…',
+    'Comparing against nearby practices…',
+    'Putting your results together…',
   ];
 
   function startLoadingTicker() {
@@ -113,7 +114,7 @@ function initAuditBar() {
   function resetPanels() {
     errorBox.classList.remove('active');
     results.classList.remove('active');
-    [matchEl, noticeEl, moreEl, againEl].forEach(el => { if (el) { el.hidden = true; el.innerHTML = ''; } });
+    [matchEl, noticeEl, moreEl, againEl, contextEl].forEach(el => { if (el) { el.hidden = true; el.innerHTML = ''; } });
     if (findingsList) findingsList.innerHTML = '';
     if (dialEl) dialEl.innerHTML = '';
     if (scoreEl) scoreEl.innerHTML = '';
@@ -156,13 +157,14 @@ function initAuditBar() {
   /* ---- one finding row ---- */
   function findingRow(f, i) {
     const urgent = f.severity === 'critical' || f.severity === 'high';
+    const clear = f.severity === 'clear';
     const li = document.createElement('li');
     li.className = 'af-row';
     const fig = f.value
       ? `<span class="af-fig">${escapeHtml(f.value)}${f.benchmark ? `<br><span class="af-bench">vs ${escapeHtml(f.benchmark)}</span>` : ''}</span>`
       : '';
     li.innerHTML =
-      `<span class="af-dot${urgent ? ' urgent' : ''}"></span>
+      `<span class="af-dot${urgent ? ' urgent' : clear ? ' clear' : ''}"></span>
        <span class="af-body">
          <span class="af-title">${escapeHtml(f.title)}</span>
          ${f.consequence ? `<span class="af-desc">${escapeHtml(f.consequence)}</span>` : ''}
@@ -183,7 +185,7 @@ function initAuditBar() {
     ctaEl.innerHTML =
       `<form class="audit-email-form" id="audit-email-form">
          <input type="email" id="audit-email-input" placeholder="you@yourpractice.com" required aria-label="Your email">
-         <button type="submit" class="btn btn-primary">Email me the full report</button>
+         <button type="submit" class="btn btn-primary">Email me my full report</button>
        </form>
        <span class="audit-email-msg" id="audit-email-msg" hidden></span>
        <a class="audit-cta-wa" href="${wa}" target="_blank" rel="noopener">Message on WhatsApp about the top fix</a>`;
@@ -223,14 +225,14 @@ function initAuditBar() {
         msg.textContent = result.message || "Couldn't send that right now — message on WhatsApp instead.";
         msg.className = 'audit-email-msg warn';
         msg.hidden = false;
-        btn.textContent = 'Email me the full report';
+        btn.textContent = 'Email me my full report';
         btn.disabled = false;
       }
     } catch (err) {
       msg.textContent = "Couldn't send that right now — message on WhatsApp instead.";
       msg.className = 'audit-email-msg warn';
       msg.hidden = false;
-      btn.textContent = 'Email me the full report';
+      btn.textContent = 'Email me my full report';
       btn.disabled = false;
     }
   }
@@ -258,8 +260,11 @@ function initAuditBar() {
     // score + verdict + dial
     const name = (data.matched && data.matched.name) || value || '';
     scoreEl.innerHTML = `<b>${data.score != null ? data.score : '&mdash;'}</b> / 100${name ? ` &middot; ${escapeHtml(name)}` : ''}`;
-    verdictEl.textContent = data.verdict || '';
+    // The mechanical verdict line is a fallback only — the AI summary is the
+    // real position-B copy when it's available.
+    verdictEl.textContent = data.aiSummary || data.verdict || '';
     if (data.score != null) renderDial(data.score);
+    if (data.scoreContext) { contextEl.textContent = data.scoreContext; contextEl.hidden = false; }
 
     // notice (non-healthcare / website mismatch)
     let notice = '';

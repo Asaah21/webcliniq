@@ -141,6 +141,7 @@ section { padding: 88px 0; }
 .hero-lede h1 { font-size: clamp(2rem, 3.6vw, 2.75rem); line-height: 1.12; max-width: 21ch; }
 .hero-sub { font-size: 1.08rem; max-width: 54ch; margin: 0; }
 .audit-bar-wrap { max-width: 620px; }
+.hero .sample-card.hero-image { margin: 0 0 34px; max-width: 100%; }
 
 @media (max-width: 700px) {
   .hero { padding: 56px 0 56px; }
@@ -257,6 +258,7 @@ section { padding: 88px 0; }
 .audit-score { font-family: var(--font-mono); font-size: 0.74rem; color: var(--muted); margin: 0 0 4px; }
 .audit-score b { font-family: var(--font-display); font-size: 1rem; color: var(--ink); font-weight: 700; }
 .audit-verdict { font-family: var(--font-display); font-weight: 600; font-size: 1.05rem; line-height: 1.3; color: var(--ink); margin: 0; text-wrap: balance; }
+.audit-context { font-size: 0.82rem; color: var(--muted); margin: 6px 0 0; }
 
 /* notice (non-healthcare / website mismatch) */
 .audit-notice { background: var(--accent-soft); color: var(--ink); border-left: 3px solid var(--accent); border-radius: 0 var(--radius) var(--radius) 0; padding: 10px 14px; margin: 16px 0 0; font-size: 0.85rem; }
@@ -272,6 +274,7 @@ section { padding: 88px 0; }
 .af-row:last-child { border-bottom: none; }
 .af-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; background: var(--border); }
 .af-dot.urgent { background: var(--accent-warm); }
+.af-dot.clear { background: var(--forest); }
 .af-body { min-width: 0; }
 .af-title { display: block; font-weight: 600; font-size: 0.9rem; color: var(--ink); }
 .af-desc { display: block; font-size: 0.82rem; color: var(--muted); margin-top: 1px; }
@@ -458,12 +461,17 @@ section { padding: 88px 0; }
 /* ---------- Step 4: pain / process / who's-behind ---------- */
 .pain-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
 .pain { border-left: 2px solid var(--border); padding: 4px 0 4px 18px; }
+.pain-icon { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%; background: var(--white); border: 1px solid var(--border); color: var(--ink); margin-bottom: 14px; }
+.pain-icon svg { width: 20px; height: 20px; }
 .pain h3 { font-size: 1.05rem; margin-bottom: 8px; }
 .pain p { font-size: 0.95rem; margin: 0; }
 .pain-note { margin-top: 34px; font-family: var(--font-mono); font-size: 0.82rem; color: var(--muted); }
 .pain-note a { color: var(--forest); }
 
-.process-flow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 22px; position: relative; }
+/* Sample-result hero image — reuses .audit-results styling, static/non-interactive */
+.sample-card { max-width: 580px; margin: 0 auto; position: relative; }
+
+.process-flow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 22px; position: relative; }
 .process-flow::before {
   content: ''; position: absolute; left: 16px; right: 16px; top: 16px; height: 2px;
   background: var(--border); z-index: 0;
@@ -485,6 +493,12 @@ section { padding: 88px 0; }
   .process-flow .pf-step { opacity: 1; transform: none; transition: none; }
 }
 
+.process-alt {
+  margin-top: 36px; padding-top: 28px; border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap;
+}
+.process-alt p { margin: 0; font-size: 0.92rem; color: var(--ink-soft); }
+
 .who-grid { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 48px; align-items: center; }
 .who-photo { position: relative; display: grid; place-items: center; border-radius: var(--radius-lg); overflow: hidden; background: var(--paper-alt); border: 1px solid var(--border); aspect-ratio: 4 / 5; }
 .who-photo::after { content: 'Photo'; position: absolute; font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); letter-spacing: 0.08em; }
@@ -501,6 +515,7 @@ section { padding: 88px 0; }
   .pf-step p { grid-column: 2; }
   .who-grid { grid-template-columns: 1fr; gap: 28px; }
   .who-photo { max-width: 280px; }
+  .process-alt { flex-direction: column; gap: 12px; text-align: center; }
 }
 
 @media (max-width: 900px) {
