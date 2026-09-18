@@ -72,8 +72,8 @@ function reportBody(row) {
       ${f.fix ? `<p class="fix"><span>The fix</span> ${esc(f.fix)}</p>` : ''}
     </div>`).join('');
 
-  const tightenRows = tighten.map((f) => `<li>${esc(f.title)}${f.value ? ` &mdash; ${esc(f.value)}` : ''}${f.fix ? ` <span class="tighten-fix">(${esc(f.fix)})</span>` : ''}</li>`).join('');
-  const clearRows = clear.map((f) => `<li>${esc(f.title)}${f.value ? ` &mdash; ${esc(f.value)}` : ''}</li>`).join('');
+  const tightenRows = tighten.map((f) => `<li>${esc(f.title)}${f.value ? `: ${esc(f.value)}` : ''}${f.fix ? ` <span class="tighten-fix">(${esc(f.fix)})</span>` : ''}</li>`).join('');
+  const clearRows = clear.map((f) => `<li>${esc(f.title)}${f.value ? `: ${esc(f.value)}` : ''}</li>`).join('');
 
   const bits = [];
   if (attention.length) bits.push(`${attention.length} to fix`);
@@ -90,7 +90,7 @@ function reportBody(row) {
 
   return `
   <header class="rpt-head">
-    <span class="logo">WebClini<b>Q</b></span>
+    <a class="logo" href="/">WebClini<b>Q</b></a>
     <span class="date">${esc(dateStr)}</span>
   </header>
 
@@ -110,8 +110,8 @@ function reportBody(row) {
   ${clearRows ? `<section><h2>Looking good</h2><ul class="clear-list">${clearRows}</ul></section>` : ''}
 
   <div class="cta">
-    <a class="btn" href="${wa}">Message us about the top fix</a>
-    <p>One person, and it's the person doing the work. Most fixes are small and fixed-scope — you see the number before anything starts.</p>
+    <a class="btn" href="${wa}">Message me about the top fix</a>
+    <p>One person, and it's the person doing the work. Most fixes are small and fixed-scope, and you see the price before anything starts.</p>
   </div>
 
   <footer class="rpt-foot">
@@ -126,7 +126,9 @@ function shell(title, body) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>${esc(title)} — WebCliniQ</title>
+<title>${esc(title)} | WebCliniQ</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="/webcliniq-icon.svg">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
 <style>
   :root{ --ink:#12233D; --soft:#45566E; --muted:#6B7890; --line:#DCE2EA; --paper:#FFFFFF; --alt:#F5F7FA; --warm:#D65B34; --green:#1C8E77; }
@@ -134,7 +136,7 @@ function shell(title, body) {
   body{ margin:0; background:var(--alt); color:var(--ink); font:16px/1.6 'Inter',system-ui,sans-serif; }
   .wrap{ max-width:680px; margin:0 auto; padding:32px 22px 64px; }
   .rpt-head{ display:flex; justify-content:space-between; align-items:baseline; padding-bottom:14px; border-bottom:2px solid var(--ink); }
-  .logo{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:1.25rem; }
+  .logo{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:1.25rem; color:var(--ink); text-decoration:none; }
   .logo b{ color:var(--warm); font-weight:700; }
   .date{ font-family:'JetBrains Mono',monospace; font-size:.75rem; color:var(--muted); }
   h1{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:1.7rem; letter-spacing:-.02em; margin:24px 0 16px; text-wrap:balance; }

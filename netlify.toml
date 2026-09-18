@@ -1,3 +1,8 @@
 [build]
   functions = "netlify/functions"
   publish = "."
+  edge_functions = "netlify/edge-functions"
+
+[[edge_functions]]
+  path = "/api/audit-stream"
+  function = "audit"

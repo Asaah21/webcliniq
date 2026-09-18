@@ -3,8 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WebCliniQ — Web Services for Healthcare Practices</title>
+<title>WebCliniQ | Web Services for Healthcare Practices</title>
 <meta name="description" content="Web services for healthcare practices: speed fixes, Google visibility, and websites that convert. Start with a free audit of what's costing you patients online.">
+<link rel="canonical" href="https://webcliniq.com/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="WebCliniQ">
+<meta property="og:title" content="WebCliniQ | Web Services for Healthcare Practices">
+<meta property="og:description" content="Web services for healthcare practices: speed fixes, Google visibility, and websites that convert. Start with a free audit of what's costing you patients online.">
+<meta property="og:url" content="https://webcliniq.com/">
+<meta property="og:image" content="https://webcliniq.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/svg+xml" href="webcliniq-icon.svg">
 <link rel="stylesheet" href="styles.css">
@@ -34,89 +44,76 @@
   <!-- HERO -->
   <section class="hero" id="audit">
     <div class="container">
-      <div class="hero-lede">
-        <h1>Patients are choosing the practice down the road &mdash; and it's usually not about the care.</h1>
-        <p class="hero-sub">See what's quietly sending new patients to the practice down the road &mdash; the things they notice before they ever call you.</p>
-      </div>
+      <div class="hero-grid">
 
-      <div class="audit-results sample-card active hero-image">
-        <div class="audit-verdict-row">
-          <div class="audit-dial">
-            <svg viewBox="0 0 96 96" width="96" height="96" aria-hidden="true">
-              <circle class="audit-dial-track" cx="48" cy="48" r="42"></circle>
-              <circle class="audit-dial-arc" cx="48" cy="48" r="42" stroke-dasharray="264" stroke-dashoffset="95"></circle>
-            </svg>
-            <span class="audit-dial-num">64</span>
-          </div>
-          <div class="audit-verdict-text">
-            <p class="audit-score"><b>64</b> / 100</p>
-            <p class="audit-verdict">Start with your reviews, then your phone-site speed.</p>
+        <div class="hero-left">
+          <h1 class="hero-headline">A nurse who builds websites for healthcare practices.</h1>
+          <p class="hero-sub">I know what patients look for before they book, because I've worked with them.</p>
+
+          <div class="audit-bar-wrap">
+            <p class="audit-bar-label">Check any practice. Results in about 30 seconds.</p>
+            <form id="audit-form" class="audit-form">
+              <div class="audit-bar">
+                <input type="text" id="audit-input"
+                       placeholder="Enter practice name or website"
+                       required
+                       autocomplete="off">
+                <button type="submit" class="btn btn-accent">Check &rarr;</button>
+              </div>
+            </form>
+            <div class="audit-loading" id="audit-loading">
+              <span class="dot"></span>
+              <span class="audit-loading-text">Checking your Google presence…</span>
+            </div>
+
+            <div class="audit-error" id="audit-error">
+              <p></p>
+            </div>
           </div>
         </div>
-        <ul class="audit-findings">
-          <li class="af-row in">
-            <span class="af-dot urgent"></span>
-            <span class="af-body">
-              <span class="af-title">Reviews vs. your area</span>
-            </span>
-            <span class="af-fig">11 &middot; 4.1★<br><span class="af-bench">vs nearby: 52, 47, 38</span></span>
-          </li>
-          <li class="af-row in">
-            <span class="af-dot urgent"></span>
-            <span class="af-body">
-              <span class="af-title">Phone-site speed</span>
-            </span>
-            <span class="af-fig">6.8s to load<br><span class="af-bench">vs patients bounce past ~3s</span></span>
-          </li>
-          <li class="af-row in">
-            <span class="af-dot"></span>
-            <span class="af-body">
-              <span class="af-title">Structured data</span>
-            </span>
-          </li>
-        </ul>
-      </div>
 
-      <div class="audit-bar-wrap">
-        <form id="audit-form" class="audit-form">
-          <div class="audit-bar">
-            <input type="text" id="audit-input" placeholder="Practice name or website" required>
-            <button type="submit" class="btn btn-accent">Run the check</button>
-          </div>
-        </form>
-        <p class="audit-bar-hint" id="audit-hint">Free check &middot; about 15 seconds &middot; a practice name is enough</p>
-        <p class="audit-trust-note">We read only public pages. We never touch your site. <a href="privacy.html" class="audit-privacy-link">Privacy &amp; terms</a></p>
+        <div class="hero-right">
 
-          <div class="audit-loading" id="audit-loading">
-            <span class="dot"></span><span class="audit-loading-text">Running your audit…</span>
+          <div class="audit-results demo-panel active" id="audit-demo">
+            <div class="demo-checking" id="demo-checking">
+              <div class="demo-pulse">
+                <span class="demo-pulse-ring"></span>
+                <span class="demo-pulse-dot"></span>
+              </div>
+              <p class="demo-checking-text" id="demo-checking-text">Checking your Google presence…</p>
+            </div>
+
+            <div class="demo-result" id="demo-result" hidden>
+              <p class="audit-match" id="demo-match" hidden></p>
+              <div class="audit-verdict-row">
+                <div class="audit-dial" id="demo-dial"></div>
+                <div class="audit-verdict-text">
+                  <p class="audit-score" id="demo-score"></p>
+                </div>
+              </div>
+              <p class="audit-context" id="demo-context" hidden></p>
+              <ul class="audit-findings" id="demo-findings"></ul>
+              <p class="audit-more" id="demo-more" hidden></p>
+            </div>
           </div>
 
-          <div class="audit-error" id="audit-error">
-            <p></p>
-          </div>
-
-          <div class="audit-results" id="audit-results">
+          <div class="audit-results" id="audit-results" hidden>
             <p class="audit-match" id="audit-match" hidden></p>
-
             <div class="audit-verdict-row">
               <div class="audit-dial" id="audit-dial"></div>
               <div class="audit-verdict-text">
                 <p class="audit-score" id="audit-score"></p>
-                <p class="audit-verdict" id="audit-verdict"></p>
-                <p class="audit-context" id="audit-context" hidden></p>
               </div>
             </div>
-
+            <p class="audit-context" id="audit-context" hidden></p>
             <p class="audit-notice" id="audit-notice" hidden></p>
-
             <ul class="audit-findings" id="audit-findings"></ul>
-
             <p class="audit-more" id="audit-more" hidden></p>
-
             <div class="audit-cta" id="audit-cta"></div>
-
             <p class="audit-again" id="audit-again" hidden></p>
           </div>
+
+        </div>
       </div>
     </div>
   </section>
@@ -126,13 +123,13 @@
     <div class="container">
       <div class="section-head">
         <span class="eyebrow">Why it happens</span>
-        <h2>It's rarely the care. It's the three things they check first.</h2>
+        <h2>Patients judge a practice on three things before they ever call.</h2>
       </div>
       <div class="pain-grid reveal">
         <div class="pain">
           <span class="pain-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><line x1="20" y1="20" x2="15.3" y2="15.3"></line></svg></span>
           <h3>They can't find you</h3>
-          <p>Someone searches for a practice nearby and you're not in the first few results &mdash; or not on the map at all.</p>
+          <p>Someone searches for a practice nearby and you're not in the first few results, or not on the map at all.</p>
         </div>
         <div class="pain">
           <span class="pain-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 3 14.9 9.1 21.5 9.9 16.8 14.3 18 20.9 12 17.6 6 20.9 7.2 14.3 2.5 9.9 9.1 9.1"></polygon></svg></span>
@@ -145,7 +142,7 @@
           <p>Slow on a phone, no obvious way to book or call. They came ready and left looking.</p>
         </div>
       </div>
-      <p class="pain-note">Usually it's three or four specific things &mdash; not a new website. <a href="services.html">See what we fix &rarr;</a></p>
+      <p class="pain-note">Usually it comes down to three or four specific fixes. <a href="#services">See what I fix &rarr;</a></p>
     </div>
   </section>
 
@@ -154,18 +151,18 @@
     <div class="container">
       <div class="section-head">
         <span class="eyebrow">How this works</span>
-        <h2>We find what's costing you patients, then fix it in that order.</h2>
+        <h2>I find what's losing you patients, then fix the worst first.</h2>
       </div>
       <ol class="process-flow reveal">
         <li class="pf-step" style="--i:0">
           <span class="pf-mark">1</span>
           <h3>Check what's public</h3>
-          <p>Your Google listing and your website &mdash; the same things a patient sees.</p>
+          <p>Your Google listing and your website, the same things a patient sees.</p>
         </li>
         <li class="pf-step" style="--i:1">
           <span class="pf-mark">2</span>
           <h3>Sort it worst-first</h3>
-          <p>What's actually losing you patients, ranked. Not a 40-page report.</p>
+          <p>Every problem ranked by how much it hurts, on one short list.</p>
         </li>
         <li class="pf-step is-fix" style="--i:2">
           <span class="pf-mark">3</span>
@@ -175,22 +172,47 @@
       </ol>
       <div class="process-alt">
         <p>Already know what needs fixing?</p>
-        <a href="https://wa.me/233538665715?text=Hi%20WebCliniQ.%20I%20know%20what%20I%20need%20done%20on%20my%20practice%27s%20web%20presence." class="btn btn-outline">Tell me the one job &rarr;</a>
+        <a href="https://wa.me/233538665715?text=Hi%20Emmanuel.%20I%20know%20what%20I%20need%20done%20on%20my%20practice%27s%20web%20presence." class="btn btn-outline" target="_blank" rel="noopener">Tell me the one job &rarr;</a>
       </div>
     </div>
   </section>
 
+  <!-- SERVICES -->
+  <section class="section-alt" id="services">
+    <div class="container">
+      <div class="section-head">
+        <span class="eyebrow">What I fix</span>
+        <h2>Two things that move patient numbers.</h2>
+      </div>
+      <div class="services-grid reveal">
+        <div class="service-card">
+          <h3>Show up when patients search</h3>
+          <p>When someone searches for a practice nearby, Google decides who appears. Your listing, your reviews and how often new ones come in all feed that decision. I make sure yours work in your favour.</p>
+          <p class="service-covers"><strong>What this covers:</strong> Google Business Profile, local search visibility, review growth, competitor gap analysis.</p>
+          <a href="https://wa.me/233538665715?text=Hi%20Emmanuel%2C%20I%27m%20interested%20in%20improving%20how%20my%20practice%20shows%20up%20on%20Google." class="btn btn-outline" target="_blank" rel="noopener">Talk to me about this &rarr;</a>
+        </div>
+        <div class="service-card">
+          <h3>A website that works on a patient's phone</h3>
+          <p>If your site is slow on a phone, has no obvious way to call or book, or hides the basics, patients leave. I build and fix healthcare websites so the patients who find you get in touch.</p>
+          <p class="service-covers"><strong>What this covers:</strong> New website builds, speed fixes, security, broken links, booking and contact improvements.</p>
+          <a href="https://wa.me/233538665715?text=Hi%20Emmanuel%2C%20I%27m%20interested%20in%20fixing%20or%20building%20my%20practice%20website." class="btn btn-outline" target="_blank" rel="noopener">Talk to me about this &rarr;</a>
+        </div>
+      </div>
+      <p class="pain-note">Not sure which applies? <a href="#audit">Run the free check above</a> and see where you stand.</p>
+    </div>
+  </section>
+
   <!-- WHO'S BEHIND IT -->
-  <section class="section-alt" id="about">
+  <section id="about">
     <div class="container who-grid">
       <div class="who-photo">
         <img src="emmanuel.jpg" alt="Emmanuel Asaah Alemya" loading="lazy">
       </div>
       <div class="who-text">
         <span class="eyebrow">Who's behind it</span>
-        <h2>A nurse who learned to build and secure the web.</h2>
-        <p>WebCliniQ is Emmanuel Asaah Alemya. Years on the floor as a registered nurse, then self-taught in software, with a background in security and technical support.</p>
-        <p>The three together are the point: someone who knows how patients actually choose a practice, can build and fix the site, and keeps it safe &mdash; aimed at the small things that move patient numbers, not big rebuilds.</p>
+        <h2>Registered nurse, then developer.</h2>
+        <p>I'm Emmanuel Asaah Alemya, and WebCliniQ is my business. I spent years on the floor as a registered nurse, then taught myself software, with a background in security and technical support.</p>
+        <p>That means you deal with one person who knows how patients choose a practice, can build and fix the site, and keeps it secure. I focus on small, specific fixes, and only suggest a rebuild when the site truly needs one.</p>
         <a href="about.html" class="btn btn-outline">More about me</a>
       </div>
     </div>
@@ -205,15 +227,15 @@
       </div>
       <div class="faq-item">
         <button class="faq-q">Is the audit really free?<span class="icon">+</span></button>
-        <div class="faq-a"><div class="faq-a-inner">Yes. No card, no signup wall. Type in your business name or website and you get real results in about 15 seconds. There's no obligation to fix anything it finds.</div></div>
+        <div class="faq-a"><div class="faq-a-inner">Yes. You don't need a card or an account. Type in your practice name or website and you'll see real results in about 30 seconds. You're under no obligation to fix anything it finds.</div></div>
       </div>
       <div class="faq-item">
         <button class="faq-q">Will you touch my live website?<span class="icon">+</span></button>
-        <div class="faq-a"><div class="faq-a-inner">Not during the audit. It only reads what's already public &mdash; your page speed, your Google listing, your reviews. Nothing changes until you decide to move forward with a fix.</div></div>
+        <div class="faq-a"><div class="faq-a-inner">Not during the audit. It only reads what's already public: your page speed, your Google listing and your reviews. Nothing changes until you decide to move forward with a fix.</div></div>
       </div>
       <div class="faq-item">
         <button class="faq-q">What if the audit doesn't find anything urgent?<span class="icon">+</span></button>
-        <div class="faq-a"><div class="faq-a-inner">Then we'll tell you that plainly. A clean audit is a good thing, and we're not going to invent an issue to sell you something.</div></div>
+        <div class="faq-a"><div class="faq-a-inner">Then I'll say so. A clean result is good news, and I won't invent a problem to sell you a fix.</div></div>
       </div>
       <p class="pain-note"><a href="faq.html">See all questions &rarr;</a></p>
     </div>
@@ -223,7 +245,7 @@
   <section class="section-dark">
     <div class="container text-center">
       <h2>See what's costing you patients.</h2>
-      <p>Free, about 15 seconds, no obligation to fix anything we find.</p>
+      <p>Free, about 30 seconds, no obligation to fix anything it finds.</p>
       <a href="#audit" class="btn btn-accent">Run the check</a>
     </div>
   </section>
