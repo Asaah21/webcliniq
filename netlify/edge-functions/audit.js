@@ -1107,7 +1107,7 @@ async function runAudit(request, send) {
       moreCount,
       city,
       prominenceRank,
-      publicId,
+      publicId: auditId ? publicId : null,
       auditId,
       allFindings,
       topFindings: shown,

@@ -562,6 +562,14 @@ function initAuditBar() {
     }
   }
 
+  // 'match' only arrives when a Google listing is found, so any result event
+  // has to be able to reveal the panel, or a no-listing check hangs on the ticker.
+  function revealResults() {
+    stopLoadingTicker();
+    if (typeof window.crossfadeToReal === 'function') window.crossfadeToReal();
+    results.classList.add('active');
+  }
+
   function handleStreamEvent(event, inputValue, state) {
     switch (event.type) {
 
@@ -570,10 +578,7 @@ function initAuditBar() {
         break;
 
       case 'match':
-        stopLoadingTicker();
-        // First genuine stream signal — crossfade the hero demo out.
-        if (typeof window.crossfadeToReal === 'function') window.crossfadeToReal();
-        results.classList.add('active');
+        revealResults();
         state.matched = event;
         if (matchEl && event.name) {
           const site = event.website
@@ -588,6 +593,7 @@ function initAuditBar() {
       case 'listing':
       case 'website':
       case 'pagespeed':
+        revealResults();
         // Append findings as they arrive
         (event.findings || []).forEach(f => {
           // Only show critical/high/medium — not clear or low (those wait for complete)
@@ -621,6 +627,7 @@ function initAuditBar() {
         break;
 
       case 'complete':
+        revealResults();
         // Merge final state
         Object.assign(state, {
           score: event.score,
