@@ -18,7 +18,7 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&':
 
 const page = (statusCode, title, bodyHtml) => ({
   statusCode,
-  headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
+  headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': statusCode === 200 ? 'public, max-age=300' : 'no-store' },
   body: shell(title, bodyHtml),
 });
 
@@ -26,7 +26,7 @@ exports.handler = async (event) => {
   const id = (event.queryStringParameters && event.queryStringParameters.id)
     || (event.path || '').replace(/\/+$/, '').split('/').pop();
 
-  if (!id || id === 'report') {
+  if (!id || id === 'report' || !/^[A-Za-z0-9]{6,32}$/.test(id)) {
     return page(404, 'Report not found', `<h1>Report not found</h1><p>That link doesn't point to a report. <a href="/">Run a new check</a>.</p>`);
   }
   if (!supabase) {

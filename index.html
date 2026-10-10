@@ -54,19 +54,19 @@
             <p class="audit-bar-label">Check any practice. Results in about 30 seconds.</p>
             <form id="audit-form" class="audit-form">
               <div class="audit-bar">
-                <input type="text" id="audit-input"
+                <input type="text" id="audit-input" aria-label="Practice name or website" maxlength="200"
                        placeholder="Enter practice name or website"
                        required
                        autocomplete="off">
                 <button type="submit" class="btn btn-accent">Check &rarr;</button>
               </div>
             </form>
-            <div class="audit-loading" id="audit-loading">
+            <div class="audit-loading" id="audit-loading" role="status" aria-live="polite">
               <span class="dot"></span>
               <span class="audit-loading-text">Checking your Google presence…</span>
             </div>
 
-            <div class="audit-error" id="audit-error">
+            <div class="audit-error" id="audit-error" role="alert">
               <p></p>
             </div>
           </div>
@@ -273,7 +273,7 @@
         <ul>
           <li><a href="contact.html">Contact</a></li>
           <li><a href="mailto:support@webcliniq.com">support@webcliniq.com</a></li>
-          <li><a href="https://www.linkedin.com/in/emmanuelasaah" target="_blank" rel="noopener">LinkedIn</a></li>
+          <li><a href="https://www.linkedin.com/in/asaahweb" target="_blank" rel="noopener">LinkedIn</a></li>
         </ul>
       </div>
       <div>

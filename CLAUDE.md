@@ -10,11 +10,11 @@ Pre-revenue. Every session should produce working, tested code — not experimen
 The streaming migration is done (September 2026).
 
 **`netlify/edge-functions/audit.js` is the audit engine**: Places, PageSpeed, website content
-checks, Gemini enrichment, scoring and the `audits` insert. It is a Deno edge function served at
+checks, Gemini enrichment, scoring and the `audits` row (created at the start of a check so the per-IP rate limit counts in-flight checks, filled in at the end). It is a Deno edge function served at
 `/api/audit-stream` (wired in `netlify.toml`) and streams Server-Sent Events to `script.js`.
 
 **`netlify/functions/audit.js` is email capture only** (`action: 'capture_email'`): it emails the
-already-computed results via Resend, inserts into `audit_leads`, and notifies the owner. It runs
+already-computed results via Resend (built from the stored audit looked up by `public_id`, never from client-sent findings; max 2 sends per audit), inserts into `audit_leads`, and notifies the owner. It runs
 no checks. `netlify/functions/report.js` serves the read-only `/r/<public_id>` report page.
 
 ## Stack
@@ -65,9 +65,16 @@ New checks, scoring changes and enrichment work all go in `netlify/edge-function
 |---|---|---|
 | critical | −15 | No website, no Google listing |
 | high | −8 | Speed timeout, NAP mismatch, rank outside top 10, recency > 90 days |
-| medium | −4 | Thin reviews, no social media, no GBP description, < 6 photos |
+| medium | −4 | Thin reviews, no social media, < 6 photos |
 | low | 0 | Missing pages, minor copy issues |
 | clear | 0 | Passing check — shown as reassurance |
+
+## Honesty rules for checks
+- An API failure is never a finding. If Places, Place Details, PageSpeed or Nearby Search fail, skip the
+  finding (or emit a `low` "couldn't check") instead of reporting the thing as missing.
+- Do not add checks the API can't measure. The owner-written GBP description is not exposed by Places,
+  so there is no "no GBP description" check.
+- "No website" is only claimed when a listing was found, Place Details succeeded, and no website is linked.
 
 ## Env vars
 - `GOOGLE_API_KEY` — Places, PageSpeed, Geocoding

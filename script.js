@@ -11,8 +11,10 @@ function initNav() {
   const toggle = document.querySelector('.nav-toggle');
   const links = document.querySelector('.nav-links');
   if (!toggle || !links) return;
-  toggle.addEventListener('click', () => links.classList.toggle('open'));
-  links.querySelectorAll('a').forEach(a => a.addEventListener('click', () => links.classList.remove('open')));
+  const sync = () => toggle.setAttribute('aria-expanded', links.classList.contains('open') ? 'true' : 'false');
+  sync();
+  toggle.addEventListener('click', () => { links.classList.toggle('open'); sync(); });
+  links.querySelectorAll('a').forEach(a => a.addEventListener('click', () => { links.classList.remove('open'); sync(); }));
 }
 
 /* ---------- Scroll reveal ---------- */
@@ -45,10 +47,18 @@ function initFAQ() {
   items.forEach(item => {
     const q = item.querySelector('.faq-q');
     if (!q) return;
+    q.setAttribute('aria-expanded', 'false');
     q.addEventListener('click', () => {
       const wasOpen = item.classList.contains('open');
-      items.forEach(i => i.classList.remove('open'));
-      if (!wasOpen) item.classList.add('open');
+      items.forEach(i => {
+        i.classList.remove('open');
+        const b = i.querySelector('.faq-q');
+        if (b) b.setAttribute('aria-expanded', 'false');
+      });
+      if (!wasOpen) {
+        item.classList.add('open');
+        q.setAttribute('aria-expanded', 'true');
+      }
     });
   });
 }
@@ -103,12 +113,6 @@ const DEMO_PRACTICE = {
       key: 'reviews-vs-area', severity: 'high',
       title: 'Google reviews', value: '14 · 4.6★',
       benchmark: 'nearby: 51, 43, 38',
-      event: 'listing'
-    },
-    {
-      key: 'gbp-description', severity: 'medium',
-      title: 'Google profile description', value: 'not written',
-      consequence: 'Space to tell patients what you treat, left blank.',
       event: 'listing'
     },
     {
@@ -521,6 +525,7 @@ function initAuditBar() {
       screenshot: null,
       isHealthcare: null,
       hadWebsite: false,
+      finished: false,
     };
 
     try {
@@ -555,6 +560,11 @@ function initAuditBar() {
             console.error('Stream parse error:', e);
           }
         }
+      }
+
+      if (!auditState.finished) {
+        stopLoadingTicker();
+        showError('The check was cut short before it finished. Please try again.');
       }
     } catch (err) {
       stopLoadingTicker();
@@ -627,6 +637,7 @@ function initAuditBar() {
         break;
 
       case 'complete':
+        state.finished = true;
         revealResults();
         // Merge final state
         Object.assign(state, {
@@ -682,6 +693,7 @@ function initAuditBar() {
         break;
 
       case 'error':
+        state.finished = true;
         stopLoadingTicker();
         showError(event.message || 'Something went wrong. Try again.');
         break;

@@ -65,25 +65,62 @@ exports.handler = async (event) => {
 
 /* ---------- Email capture ---------- */
 async function handleEmailCapture(payload) {
-  const { email, search_query, health_score, findings, ai_summary, audit_id, public_id } = payload;
+  const { email, public_id } = payload;
 
-  if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (!email || typeof email !== 'string' || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { statusCode: 400, body: JSON.stringify({ success: false, error: "That doesn't look like a valid email address." }) };
   }
 
-  if (!RESEND_API_KEY) {
+  if (!RESEND_API_KEY || !supabase) {
     return { statusCode: 200, body: JSON.stringify({ success: false, error: 'not_configured', message: "Email delivery isn't set up yet. Message me on WhatsApp and I'll send it directly." }) };
   }
 
-  const reportUrl = public_id ? `${SITE_URL}/r/${encodeURIComponent(public_id)}` : null;
-  const html = buildResultsEmailHtml({ search_query, health_score, findings: findings || [], ai_summary, reportUrl });
+  // The email is built from the stored audit, never from client-supplied
+  // fields, and each audit can only be emailed a couple of times, so this
+  // endpoint can't be used to send arbitrary content to arbitrary people.
+  if (!public_id || typeof public_id !== 'string' || public_id.length > 32) {
+    return { statusCode: 200, body: JSON.stringify({ success: false, error: 'no_report', message: "Couldn't find that report to send. Message me on WhatsApp instead." }) };
+  }
 
-  const flaggedCount = (findings || []).filter((f) =>
+  let audit;
+  try {
+    const { data, error } = await supabase
+      .from('audits')
+      .select('id, search_query, health_score, all_findings, ai_summary')
+      .eq('public_id', public_id)
+      .maybeSingle();
+    if (error || !data) throw new Error(error ? error.message : 'audit not found');
+    audit = data;
+
+    const { count } = await supabase
+      .from('audit_leads')
+      .select('*', { count: 'exact', head: true })
+      .eq('audit_id', audit.id);
+    if (count && count >= 2) {
+      return { statusCode: 200, body: JSON.stringify({ success: false, error: 'limit', message: "That report has already been emailed. Check your inbox, or message me on WhatsApp." }) };
+    }
+  } catch (e) {
+    console.error('audit lookup failed:', e.message);
+    return { statusCode: 200, body: JSON.stringify({ success: false, error: 'no_report', message: "Couldn't find that report to send. Message me on WhatsApp instead." }) };
+  }
+
+  const search_query = audit.search_query ? String(audit.search_query).slice(0, 80) : null;
+  const health_score = audit.health_score;
+  const findings = Array.isArray(audit.all_findings) ? audit.all_findings : [];
+  const ai_summary = audit.ai_summary;
+  const audit_id = audit.id;
+
+  const reportUrl = `${SITE_URL}/r/${encodeURIComponent(public_id)}`;
+  const html = buildResultsEmailHtml({ search_query, health_score, findings, ai_summary, reportUrl });
+
+  const flaggedCount = findings.filter((f) =>
     ['critical', 'high', 'medium'].includes(f.severity)
   ).length;
-  const subject = flaggedCount === 1
-    ? `${search_query || 'Your practice'}: the main thing affecting your patient bookings`
-    : `${search_query || 'Your practice'}: ${flaggedCount} things affecting your patient bookings`;
+  const subject = flaggedCount === 0
+    ? `${search_query || 'Your practice'}: your audit results`
+    : flaggedCount === 1
+      ? `${search_query || 'Your practice'}: the main thing affecting your patient bookings`
+      : `${search_query || 'Your practice'}: ${flaggedCount} things affecting your patient bookings`;
 
   try {
     const res = await fetchWithTimeout('https://api.resend.com/emails', {
@@ -108,22 +145,20 @@ async function handleEmailCapture(payload) {
     return { statusCode: 200, body: JSON.stringify({ success: false, error: 'send_failed', message: "Couldn't send that right now. Try WhatsApp instead." }) };
   }
 
-  if (supabase) {
-    try {
-      const { error } = await supabase.from('audit_leads').insert({
-        email,
-        search_query: search_query || null,
-        health_score: health_score ?? null,
-        findings: findings || [],
-        audit_id: audit_id || null,
-        consent_at: new Date().toISOString(),
-        source: 'audit_email',
-        status: 'new',
-      });
-      if (error) console.error('audit_leads insert failed:', error.message);
-    } catch (insertErr) {
-      console.error('audit_leads insert threw:', insertErr.message);
-    }
+  try {
+    const { error } = await supabase.from('audit_leads').insert({
+      email,
+      search_query: search_query || null,
+      health_score: health_score ?? null,
+      findings,
+      audit_id,
+      consent_at: new Date().toISOString(),
+      source: 'audit_email',
+      status: 'new',
+    });
+    if (error) console.error('audit_leads insert failed:', error.message);
+  } catch (insertErr) {
+    console.error('audit_leads insert threw:', insertErr.message);
   }
 
   // Ping the owner — best effort, never blocks the visitor's success.
@@ -161,9 +196,11 @@ function buildResultsEmailHtml({ search_query, health_score, findings, ai_summar
   const urgent = [...critical, ...high].slice(0, 3);
   const topIssueCount = urgent.length + medium.length;
 
-  const opening = health_score != null && health_score < 75
-    ? `${esc(search_query || 'Your practice')} scored ${health_score}/100. ${topIssueCount === 1 ? 'The issue' : 'The issues'} below ${topIssueCount === 1 ? 'is' : 'are'} the kind that send patients to another practice instead.`
-    : `I ran a check on ${esc(practiceName)}. A few things came up that are likely costing you patient bookings right now.`;
+  const opening = !topIssueCount
+    ? `I ran a check on ${esc(practiceName)}. Nothing urgent came up. The full results are in the link below.`
+    : health_score != null && health_score < 75
+      ? `${esc(search_query || 'Your practice')} scored ${health_score}/100. ${topIssueCount === 1 ? 'The issue' : 'The issues'} below ${topIssueCount === 1 ? 'is' : 'are'} the kind that send patients to another practice instead.`
+      : `I ran a check on ${esc(practiceName)}. A few things came up that are likely costing you patient bookings right now.`;
 
   const topFix = (findings || []).find((f) => ['critical', 'high'].includes(f.severity) && f.fix)
     || (findings || []).find((f) => f.severity === 'medium' && f.fix)
