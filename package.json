@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "test": "node --test"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4"
   }

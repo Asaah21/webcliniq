@@ -207,19 +207,85 @@ function urlsMatch(url1, url2) {
   return stripHost(url1).toLowerCase() === stripHost(url2).toLowerCase();
 }
 
-// Defence in depth for the server-side fetches: only public http(s) hosts.
+function parseIPv4Host(host) {
+  const parts = host.split('.');
+  if (parts.length !== 4) return null;
+  const nums = parts.map((part) => {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const n = Number(part);
+    return n >= 0 && n <= 255 ? n : null;
+  });
+  return nums.some((n) => n == null) ? null : nums;
+}
+
+function ipv4HostIsPublic(host) {
+  const p = parseIPv4Host(host);
+  if (!p) return true;
+  const [a, b, c] = p;
+  if (
+    a === 0 || a === 10 || a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && (b === 0 || b === 168)) ||
+    (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
+    (a === 203 && b === 0 && c === 113) ||
+    a >= 224
+  ) return false;
+  return true;
+}
+
+function parseIPv6Host(host) {
+  let value = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (!value.includes(':') || value.includes('%')) return null;
+  if (value.includes('.')) {
+    const lastColon = value.lastIndexOf(':');
+    const tail = parseIPv4Host(value.slice(lastColon + 1));
+    if (!tail) return null;
+    value = `${value.slice(0, lastColon)}:${((tail[0] << 8) | tail[1]).toString(16)}:${((tail[2] << 8) | tail[3]).toString(16)}`;
+  }
+  const halves = value.split('::');
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  if (![...left, ...right].every((part) => /^[0-9a-f]{1,4}$/.test(part))) return null;
+  const missing = 8 - left.length - right.length;
+  if ((halves.length === 1 && missing !== 0) || missing < 0) return null;
+  const groups = [...left, ...Array(Math.max(0, missing)).fill('0'), ...right].map((part) => parseInt(part, 16));
+  if (groups.length !== 8 || groups.some((n) => Number.isNaN(n))) return null;
+  return groups.reduce((acc, n) => (acc << 16n) + BigInt(n), 0n);
+}
+
+function ipv6HostIsPublic(host) {
+  const value = parseIPv6Host(host);
+  if (value == null) return true;
+  const base = (ip) => parseIPv6Host(ip);
+  const inRange = (ip, bits) => (value >> BigInt(128 - bits)) === (base(ip) >> BigInt(128 - bits));
+  const mapped = inRange('::ffff:0:0', 96);
+  if (mapped) {
+    const v4 = Number(value & 0xffffffffn);
+    return ipv4HostIsPublic(`${(v4 >>> 24) & 255}.${(v4 >>> 16) & 255}.${(v4 >>> 8) & 255}.${v4 & 255}`);
+  }
+  return ![
+    ['::', 128], ['::1', 128], ['::', 8], ['64:ff9b::', 96],
+    ['64:ff9b:1::', 48], ['100::', 64], ['2001::', 23],
+    ['2001:2::', 48], ['2001:db8::', 32], ['2002::', 16],
+    ['fc00::', 7], ['fe80::', 10], ['ff00::', 8],
+  ].some(([ip, bits]) => inRange(ip, bits));
+}
+
+// Edge prefilter only. Untrusted website fetching runs in the Node content
+// worker, where DNS answers are validated and pinned before connecting.
 function isPublicHttpUrl(u) {
   let parsed;
   try { parsed = new URL(u); } catch { return false; }
-  if (!/^https?:$/.test(parsed.protocol)) return false;
-  const host = parsed.hostname.toLowerCase();
-  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') || !host.includes('.')) return false;
-  if (host.startsWith('[')) return false;
-  const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (m) {
-    const [a, b] = [Number(m[1]), Number(m[2])];
-    if (a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224) return false;
-  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  if (parsed.username || parsed.password) return false;
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (!host || host === 'localhost' || host === 'metadata' || host === 'metadata.google.internal') return false;
+  if (host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.localdomain')) return false;
+  if (!host.includes('.') && !host.includes(':')) return false;
+  if (!ipv4HostIsPublic(host) || !ipv6HostIsPublic(host)) return false;
   return true;
 }
 
@@ -344,216 +410,33 @@ function biggestSpeedOpportunity(A) {
   return { key: 'speed-cause', domain: 'website', severity: 'medium', title: best.label, value: `~${(best.ms / 1000).toFixed(1)}s to save`, consequence: 'The biggest single thing slowing your page down.', fix: best.fix };
 }
 
-/* ---------- Website: one homepage fetch, parsed ---------- */
-const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
-const BOOKING_WIDGETS = /(calendly\.com|acuityscheduling|acuity\.com|nexhealth|zocdoc|squarespace-scheduling|setmore|simplybook|localmed|yapi|solutionreach|doctible|weave|dentrixascend|adit\.com)/i;
-const SOCIAL_DOMAINS = ['facebook.com', 'instagram.com', 'twitter.com', 'x.com', 'linkedin.com', 'youtube.com', 'tiktok.com', 'pinterest.com', 'snapchat.com', 'threads.net'];
-
-// WhatsApp alone does not count as a social media presence.
-const SOCIAL_NON_PROFILE_PATH = /^\/(tr|sharer|share|intent|plugins|dialog|embed|watch|oauth)\b|\/embed\//i;
-function checkSocialMedia(html, findings) {
-  const hasSocial = [...html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)].some((m) => {
-    let u;
-    try { u = new URL(m[1].trim(), 'https://placeholder.invalid'); } catch { return false; }
-    const host = u.hostname.toLowerCase();
-    return SOCIAL_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`)) && !SOCIAL_NON_PROFILE_PATH.test(u.pathname);
-  });
-  if (!hasSocial) {
-    findings.push({ key: 'social-media', domain: 'website', severity: 'medium', title: 'Social media presence', value: 'none linked', consequence: 'No social media linked from your site. Many patients check it to see whether a practice is active before they book.', fix: 'Social media setup' });
-  }
-}
-
-async function runWebsiteContentCheck(targetUrl) {
+/* ---------- Website content: delegated to Node function for SSRF protection ---------- */
+async function runWebsiteContentCheck(targetUrl, requestUrl) {
   const findings = [];
-  let html = '';
-  let finalUrl = targetUrl;
+  const finalUrl = targetUrl;
   if (!isPublicHttpUrl(targetUrl)) return { findings, html: '', finalUrl };
   try {
-    const res = await fetchWithTimeout(targetUrl, { timeout: 8000, redirect: 'follow', headers: { 'User-Agent': BROWSER_UA, 'Accept': 'text/html' } });
-    finalUrl = res.url || targetUrl;
-    if (!res.ok) throw new Error(`homepage HTTP ${res.status}`);
-    html = (await res.text()).slice(0, 400000); // cap — homepages that big are already a problem
+    const endpoint = new URL('/.netlify/functions/content-audit', requestUrl).href;
+    const res = await fetchWithTimeout(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: targetUrl }),
+      redirect: 'error',
+      timeout: 16000,
+    });
+    if (!res.ok) throw new Error(`content worker HTTP ${res.status}`);
+    const data = await res.json();
+    return {
+      findings: Array.isArray(data.findings) ? data.findings : [],
+      html: typeof data.html === 'string' ? data.html : '',
+      finalUrl: data.finalUrl || finalUrl,
+      spa: !!data.spa,
+    };
   } catch (e) {
-    // PageSpeed already reports an unreachable site; don't double up. Just skip.
-    console.error('homepage fetch failed for', targetUrl, e.message);
+    console.error('content worker failed for', targetUrl, e.message);
     return { findings, html: '', finalUrl };
   }
-
-  // Client-rendered sites (React/Next/Vue SPAs) serve a near-empty shell — the
-  // real content never appears in this HTML. Parsing it would emit false
-  // "not found" findings, so skip the content checks entirely.
-  const visibleText = html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  const scriptCount = (html.match(/<script\b/gi) || []).length;
-  const looksLikeSpaShell = visibleText.length < 800 && (/\bid\s*=\s*["'](root|__next|app|__nuxt)["']/i.test(html) || scriptCount > 12);
-  if (looksLikeSpaShell) {
-    console.error('homepage looks like a client-rendered shell, skipping content checks:', targetUrl);
-    return { findings, html, finalUrl, spa: true };
-  }
-
-  checkContactFriction(html, findings);
-  checkImprovementLayer(html, findings, finalUrl);
-  checkSocialMedia(html, findings);
-  await Promise.all([
-    checkBrokenLinks(html, finalUrl, findings),
-    checkKeyPages(html, finalUrl, findings),
-  ]);
-
-  return { findings, html, finalUrl };
 }
-
-// Homepage is not the whole site. Sample up to 4 internal pages and report the
-// aggregate — "3 of 5 pages have no search description" is a concrete finding.
-async function checkKeyPages(html, baseUrl, findings) {
-  let origin;
-  try { origin = new URL(baseUrl).origin; } catch { return; }
-  const seen = new Set([baseUrl.replace(/#.*$/, '').replace(/\/$/, '')]);
-  const urls = [];
-  const re = /href\s*=\s*["']([^"']+)["']/gi;
-  let m;
-  while ((m = re.exec(html)) && urls.length < 4) {
-    let abs;
-    try { abs = new URL(m[1], baseUrl); } catch { continue; }
-    if (abs.origin !== origin || !isPublicHttpUrl(abs.href)) continue;
-    if (/\.(pdf|jpg|jpeg|png|gif|svg|zip|doc|docx)$/i.test(abs.pathname)) continue;
-    const norm = (abs.origin + abs.pathname).replace(/\/$/, '');
-    if (seen.has(norm)) continue;
-    seen.add(norm);
-    urls.push(norm);
-  }
-  if (!urls.length) return;
-
-  const pages = await Promise.all(urls.map(async (u) => {
-    try {
-      const r = await fetchWithTimeout(u, { timeout: 5000, redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
-      if (!r.ok) return null;
-      const h = (await r.text()).slice(0, 120000);
-      const md = (h.match(/<meta[^>]+name\s*=\s*["']?description["']?[^>]*content\s*=\s*["']([^"']{20,})["']/i) || [])[1];
-      const h1 = /<h1[\s>]/i.test(h);
-      const title = (h.match(/<title[^>]*>([^<]{5,})<\/title>/i) || [])[1];
-      return { md: !!md, h1, title: !!title };
-    } catch { return null; }
-  }));
-  const ok = pages.filter(Boolean);
-  const total = ok.length + 1; // + homepage
-  if (!ok.length) return;
-
-  const noDesc = ok.filter((p) => !p.md).length;
-  if (noDesc >= 1) {
-    findings.push({ key: 'pages-meta', domain: 'website', severity: 'low', title: 'Search descriptions', value: `${noDesc} of ${total} pages missing`, consequence: 'Google shows a snippet under each page in results. Pages without one leave Google to pick the text itself.', fix: 'On-page SEO' });
-  }
-  const noH1 = ok.filter((p) => !p.h1).length;
-  if (noH1 >= 1) {
-    findings.push({ key: 'pages-h1', domain: 'website', severity: 'low', title: 'Page structure', value: `${noH1} of ${total} pages have no clear heading`, consequence: "A page with no main heading is harder for Google and skim-readers to place.", fix: 'On-page SEO' });
-  }
-}
-
-function checkContactFriction(html, findings) {
-  const hasTel = /href\s*=\s*["']tel:/i.test(html);
-  if (!hasTel) {
-    findings.push({ key: 'tap-to-call', domain: 'website', severity: 'medium', title: 'One-tap calling', value: 'missing', consequence: "Your phone number isn't a tappable link, so mobile patients have to copy it out by hand.", fix: 'Click-to-call', verdictPhrase: 'a tap-to-call number' });
-  }
-
-  const bookingRe = /book(?:ing)?\s*(?:online|now|a?\s*appointment|an?\s*appointment)?|request\s*(?:an?\s*)?appointment|schedule\s*(?:a\s*)?(?:visit|appointment)|make\s*an?\s*appointment/i;
-  const hasBooking = bookingRe.test(html) || BOOKING_WIDGETS.test(html);
-  if (!hasBooking) {
-    findings.push({ key: 'booking-action', domain: 'website', severity: 'medium', title: 'Booking action', value: 'not found', consequence: "No clear 'Book' or 'Request appointment' button, so visitors have to hunt for how to book.", fix: 'Booking CTA', verdictPhrase: 'a clear booking button' });
-  }
-
-  const hasForm = /<form\b/i.test(html) || BOOKING_WIDGETS.test(html);
-  if (!hasForm) {
-    findings.push({ key: 'contact-form', domain: 'website', severity: 'low', title: 'Online enquiry form', value: 'none', consequence: 'Phone-only contact loses people who would rather type than call, and anyone getting in touch after hours.', fix: 'Form / booking embed' });
-  }
-
-  const hasAddress = /google\.com\/maps|maps\.google\.|<address\b|"@type"\s*:\s*"PostalAddress"|itemprop\s*=\s*["']address["']|<iframe[^>]+(?:google[^>]+maps|maps\.google)/i.test(html);
-  if (!hasAddress) {
-    findings.push({ key: 'address-map', domain: 'website', severity: 'low', title: 'Address on your website', value: 'not found', consequence: 'No address or embedded map on the homepage. That hurts local trust and how you rank nearby.', fix: 'Add address + map' });
-  }
-}
-
-// Always-on improvement layer — legitimate, healthcare-relevant, sellable, and
-// always something. All 'low' severity: they surface in "+N more", never move
-// the score.
-function checkImprovementLayer(html, findings, finalUrl) {
-  const metaTag = (html.match(/<meta\b[^>]*\bname\s*=\s*["']?description["']?[^>]*>/i) || [])[0] || '';
-  const metaDesc = (metaTag.match(/\bcontent\s*=\s*["']([^"']*)["']/i) || [])[1]
-    || (metaTag.match(/\bcontent\s*=\s*([^\s">]+)/i) || [])[1] || '';
-  if (metaDesc.trim().length < 50) {
-    findings.push({ key: 'meta-description', domain: 'website', severity: 'low', title: 'Google search preview', value: metaDesc ? 'too short' : 'missing', consequence: "Google shows a summary of your page in results. Yours is missing or too thin to be useful.", fix: 'On-page SEO' });
-  }
-
-  const imgs = html.match(/<img\b[^>]*>/gi) || [];
-  const withAlt = imgs.filter((t) => /\balt\s*=/i.test(t)).length;
-  if (imgs.length >= 4 && withAlt / imgs.length < 0.6) {
-    findings.push({ key: 'image-alt', domain: 'website', severity: 'low', title: 'Image descriptions', value: `${imgs.length - withAlt} of ${imgs.length} missing`, consequence: 'Images without alt text are invisible to screen readers and to Google image search.', fix: 'Accessibility pass' });
-  }
-
-  const haystack = html.toLowerCase();
-  const hasPage = (re) => re.test(haystack);
-  if (!hasPage(/new[\s-]?patient/)) {
-    findings.push({ key: 'new-patients-page', domain: 'website', severity: 'low', title: 'New patients page', value: 'not found', consequence: "Nothing for a first-time patient: what to bring, what to expect, how to register.", fix: 'New-patients page' });
-  }
-  if (!hasPage(/our[\s-]?team|meet[\s-]the|our[\s-]?(?:doctors|dentists|physios|providers|staff)|\bbios?\b/)) {
-    findings.push({ key: 'team-page', domain: 'website', severity: 'low', title: 'Meet the team page', value: 'not found', consequence: 'No practitioner bios. Patients choose partly on who they will see.', fix: 'Team page' });
-  }
-  if (!hasPage(/\bfaq\b|frequently\s+asked/)) {
-    findings.push({ key: 'faq-page', domain: 'website', severity: 'low', title: 'Questions & answers page', value: 'not found', consequence: 'Common questions (insurance, first visit, hours) answered on the page cut down phone back-and-forth.', fix: 'FAQ page' });
-  }
-  if (!hasPage(/insurance|\bfees\b|payment\s+options|financing|self[\s-]?pay/)) {
-    findings.push({ key: 'fees-info', domain: 'website', severity: 'low', title: 'Fees & payment info', value: 'not found', consequence: "Patients want cost and insurance answered before they call. Without it, many go elsewhere.", fix: 'Fees / insurance page' });
-  }
-
-  // Structured data — how Google reads your hours, address and services off the page.
-  const ldBlocks = html.match(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi) || [];
-  const ld = ldBlocks.join(' ');
-  const hasLocalSchema = /"@type"\s*:\s*"(MedicalBusiness|MedicalClinic|MedicalOrganization|Dentist|Physician|Hospital|LocalBusiness|Pharmacy|Optometric|DiagnosticLab)"/i.test(ld);
-  if (!ldBlocks.length) {
-    findings.push({ key: 'schema', domain: 'website', severity: 'medium', title: 'Practice info for Google', value: 'none', consequence: "Nothing tells Google your name, address, hours and services in a form it can read reliably, so it has to guess from the page.", fix: 'On-page SEO', verdictPhrase: 'your structured data' });
-  } else if (!hasLocalSchema) {
-    findings.push({ key: 'schema', domain: 'website', severity: 'low', title: 'Practice info for Google', value: 'no practice type', consequence: "Your page has some structured data, but nothing marking it as a healthcare practice, which is a missed signal for local search.", fix: 'On-page SEO' });
-  }
-}
-
-// Only flags links that are genuinely dead (404 / 410 / DNS failure). Bot blocks
-// (403 / 429), servers that reject HEAD (405), and TLS or connection resets are
-// not counted.
-async function checkBrokenLinks(html, baseUrl, findings) {
-  let origin;
-  try { origin = new URL(baseUrl).origin; } catch { return; }
-
-  const hrefs = new Set();
-  const re = /href\s*=\s*["']([^"']+)["']/gi;
-  let m;
-  while ((m = re.exec(html)) && hrefs.size < 40) {
-    const h = m[1].trim();
-    if (!h || h.startsWith('#') || /^(mailto:|tel:|javascript:|data:)/i.test(h)) continue;
-    let abs;
-    try { abs = new URL(h, baseUrl).href; } catch { continue; }
-    if (!isPublicHttpUrl(abs)) continue;
-    hrefs.add(abs.split('#')[0]);
-  }
-  // Prefer same-origin links, then a few external, capped at 20.
-  const links = [...hrefs].sort((a, b) => (a.startsWith(origin) ? 0 : 1) - (b.startsWith(origin) ? 0 : 1)).slice(0, 20);
-  if (!links.length) return;
-
-  const results = await Promise.allSettled(links.map(async (link) => {
-    try {
-      const r = await fetchWithTimeout(link, { method: 'HEAD', timeout: 4000, redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
-      return { link, status: r.status };
-    } catch (e) {
-      const dnsFailure = /dns|failed to lookup|name or service not known|no such host|enotfound/i.test(String(e && e.message));
-      return { link, status: dnsFailure ? -1 : 0 };
-    }
-  }));
-
-  const dead = results
-    .map((r) => (r.status === 'fulfilled' ? r.value : null))
-    .filter((v) => v && (v.status === 404 || v.status === 410 || v.status === -1));
-
-  if (dead.length) {
-    findings.push({ key: 'broken-links', domain: 'website', severity: 'medium', title: 'Broken links', value: `${dead.length} dead`, consequence: 'Links on your homepage lead nowhere, so patients hit dead ends.', fix: 'Link cleanup', verdictPhrase: 'the broken links' });
-  }
-}
-
 /* ---------- Listing: Google Places ---------- */
 // A typed name must plausibly overlap the matched listing's name. Skipped for
 // single-token queries derived from a domain (e.g. "aspendental").
@@ -780,7 +663,7 @@ async function getPlaceDetails(placeId, apiKey) {
     const r = data.result || {};
     const times = (r.reviews || []).map((x) => x.time).filter(Boolean);
     return {
-      website: r.website || null,
+      website: (r.website && isPublicHttpUrl(r.website)) ? r.website : null,
       openingHours: r.opening_hours || null,
       newestReviewDays: times.length ? Math.round((Date.now() / 1000 - Math.max(...times)) / 86400) : null,
       phone: r.formatted_phone_number || null,
@@ -969,7 +852,7 @@ async function runAudit(request, send) {
     if (url) {
       // URL PATH: Places + PageSpeed + Content all start in parallel
       const placesPromise = placesTarget ? runGooglePlacesCheck(placesTarget, GOOGLE_API_KEY) : Promise.resolve(null);
-      const contentPromise = runWebsiteContentCheck(url);
+      const contentPromise = runWebsiteContentCheck(url, request.url);
       const speedPromise = runPageSpeedCheck(url, GOOGLE_API_KEY, 18000);
 
       // Send events as each resolves — order-independent
@@ -1038,7 +921,7 @@ async function runAudit(request, send) {
 
         if (effectiveUrl) {
           // Run content and speed in parallel
-          const contentPromise = runWebsiteContentCheck(effectiveUrl);
+          const contentPromise = runWebsiteContentCheck(effectiveUrl, request.url);
           const speedPromise = runPageSpeedCheck(effectiveUrl, GOOGLE_API_KEY, 15000);
 
           // Send as each resolves
